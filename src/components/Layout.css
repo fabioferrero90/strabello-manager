@@ -1,0 +1,118 @@
+.layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: #f5f5f5;
+}
+
+.sidebar {
+  width: 250px;
+  height: 100vh;
+  background: #000000;
+  color: white;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 0;
+  box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.sidebar-header {
+  padding: 0 20px 30px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 20px;
+}
+
+.sidebar-logo {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.sidebar-header p {
+  font-size: 12px;
+  color: #bdc3c7;
+  text-align: center;
+}
+
+.nav-list {
+  list-style: none;
+  flex: 1;
+  padding: 0 10px;
+}
+
+.nav-list li {
+  margin-bottom: 5px;
+}
+
+.nav-list a {
+  display: flex;
+  align-items: center;
+  padding: 12px 15px;
+  color: #ecf0f1;
+  text-decoration: none;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.nav-list a:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.nav-list a.active {
+  background: #2d2d2d;
+  color: white;
+}
+
+.nav-icon {
+  margin-right: 10px;
+  font-size: 18px;
+}
+
+.logout-btn {
+  margin: 0;
+  padding: 12px;
+  background: #e74c3c;
+  color: white;
+  font-weight: bold;
+  border: none;
+  border-radius: 28px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+  width: 100%;
+}
+
+.logout-btn:hover {
+  background: #c0392b;
+}
+
+.main-content {
+  flex: 1;
+  padding: 30px;
+  overflow-y: auto;
+  height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Classe comune per tutte le pagine - larghezza univoca */
+.page-wrapper {
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    width: 200px;
+  }
+  
+  .sidebar-header h1 {
+    font-size: 16px;
+  }
+  
+  .main-content {
+    padding: 20px;
+  }
+}

@@ -1,0 +1,270 @@
+.products-page {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+}
+
+.page-header h1 {
+  font-size: 32px;
+  color: #1a1a1a;
+}
+
+.btn-primary {
+  background: #2d2d2d;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 999px !important;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+}
+
+.btn-primary:hover {
+  background: #1a1a1a;
+}
+
+.products-table-container {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  overflow-x: auto;
+}
+
+.products-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 800px;
+}
+
+.products-table thead {
+  background: #1a1a1a;
+  color: white;
+}
+
+.products-table th {
+  padding: 15px;
+  text-align: left;
+  font-weight: 600;
+}
+
+.products-table td {
+  padding: 15px;
+  border-bottom: 1px solid #ecf0f1;
+}
+
+.products-table th:last-child,
+.products-table td:last-child {
+  text-align: right;
+}
+
+.products-table tbody tr:hover {
+  background: #f8f9fa;
+}
+
+.products-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.status-queue {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.status-available {
+  background: #d4edda;
+  color: #155724;
+}
+
+.status-sold {
+  background: #d1ecf1;
+  color: #0c5460;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.btn-status {
+  background: #27ae60;
+  color: white;
+  border: none;
+  padding: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-status:hover {
+  background: #229954;
+}
+
+.btn-delete {
+  background: #e74c3c;
+  color: white;
+  border: none;
+  padding: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-delete:hover {
+  background: #c0392b;
+}
+
+.cost-preview {
+  background: #e8f5e9;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  color: #2e7d32;
+}
+
+.modal-content select {
+  width: 100%;
+  padding: 12px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 14px;
+  background: white;
+}
+
+.modal-content select:focus {
+  outline: none;
+  border-color: #2d2d2d;
+}
+
+.modal-content input[disabled] {
+  background: #f5f5f5;
+  color: #7f8c8d;
+  cursor: not-allowed;
+}
+
+.modal-content small {
+  display: block;
+  margin-top: 5px;
+  color: #7f8c8d;
+  font-size: 12px;
+}
+
+.product-row:hover {
+  background: #e8f4f8 !important;
+}
+
+.product-detail-modal {
+  max-width: 800px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.product-detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+}
+
+.detail-section {
+  border-bottom: 1px solid #e0e0e0;
+  padding-bottom: 20px;
+}
+
+.detail-section:last-child {
+  border-bottom: none;
+}
+
+.detail-section h3 {
+  color: #1a1a1a;
+  margin-bottom: 15px;
+  font-size: 20px;
+  border-bottom: 2px solid #2d2d2d;
+  padding-bottom: 8px;
+}
+
+.detail-info-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.detail-image {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detail-image img {
+  width: 150px;
+  height: 150px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 2px solid #e0e0e0;
+}
+
+.detail-image small {
+  text-align: center;
+  color: #7f8c8d;
+  font-size: 12px;
+}
+
+.detail-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.detail-item {
+  padding: 8px 0;
+  color: #1a1a1a;
+}
+
+.detail-item strong {
+  color: #2d2d2d;
+  margin-right: 8px;
+}
+
+.detail-item.highlight {
+  background: #e8f5e9;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #2e7d32;
+}
+
+.detail-item.highlight strong {
+  color: #1b5e20;
+}

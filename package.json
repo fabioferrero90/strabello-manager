@@ -1,0 +1,33 @@
+{
+  "name": "strabello-manager",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "powershell -ExecutionPolicy Bypass -File deploy-windows.ps1",
+    "deploy:linux": "bash deploy.sh",
+    "setup": "powershell -ExecutionPolicy Bypass -File setup-server.ps1",
+    "deploy:windows": "powershell -ExecutionPolicy Bypass -File deploy-windows.ps1"
+  },
+  "dependencies": {
+    "@fortawesome/fontawesome-svg-core": "^7.1.0",
+    "@fortawesome/free-solid-svg-icons": "^7.1.0",
+    "@fortawesome/react-fontawesome": "^3.1.1",
+    "@supabase/supabase-js": "^2.38.4",
+    "browser-image-compression": "^2.0.2",
+    "react": "^18.2.0",
+    "react-country-flag": "^3.1.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.20.0",
+    "recharts": "^3.6.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.0.8"
+  }
+}
