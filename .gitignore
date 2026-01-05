@@ -32,6 +32,17 @@ deploy-windows-fixed.ps1
 DEPLOY.md
 *.backup
 
+# Setup
+setup-server.ps1
+setup-server-remote.sh
+setup-on-server.sh
+SETUP-GUIDE.md
+SETUP-SERVER.md
+SETUP-ON-SERVER.md
+SETUP-GUIDE.md
+SETUP-SERVER.md
+setup-nginx.sh
+
 # Environment variables
 .env
 .env.local
