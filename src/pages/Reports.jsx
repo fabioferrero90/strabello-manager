@@ -26,6 +26,10 @@ export default function Reports() {
     totalProfit: 0,
     producerShare: 0,
     sellerShare: 0,
+    productionCostByAccount: {
+      'Fabio': 0,
+      'Mesmerized SRLS': 0
+    }
   })
   const [chartData, setChartData] = useState([])
   const [loading, setLoading] = useState(true)
@@ -51,9 +55,14 @@ export default function Reports() {
         totalSales: 0,
         totalRevenue: 0,
         totalCost: 0,
+        totalProductionCost: 0,
         totalProfit: 0,
         producerShare: 0,
         sellerShare: 0,
+        productionCostByAccount: {
+          'Fabio': 0,
+          'Mesmerized SRLS': 0
+        }
       })
       setChartData([])
     }
@@ -129,12 +138,33 @@ export default function Reports() {
   }
 
   const calculateSummary = () => {
+    const productionCostByAccount = {
+      'Fabio': 0,
+      'Mesmerized SRLS': 0
+    }
+
     const totals = filteredSales.reduce(
       (acc, sale) => {
         const revenue = parseFloat(sale.revenue || 0)
         const totalCost = parseFloat(sale.total_costs || 0) * (sale.quantity_sold || 1)
         const productionCostBase = parseFloat(sale.production_cost_base || 0) * (sale.quantity_sold || 1)
         const profit = parseFloat(sale.profit || 0)
+
+        // Calcola i costi di produzione per account di acquisto
+        // Usa il nuovo campo production_cost_by_account se disponibile (per prodotti multimateriale)
+        // Altrimenti usa il vecchio campo spool_purchase_account per retrocompatibilità
+        if (sale.production_cost_by_account && Array.isArray(sale.production_cost_by_account)) {
+          // Nuovo formato: array di oggetti con account e cost
+          sale.production_cost_by_account.forEach((item) => {
+            if (item.account && (item.account === 'Fabio' || item.account === 'Mesmerized SRLS')) {
+              // Moltiplica per la quantità venduta
+              productionCostByAccount[item.account] += (parseFloat(item.cost || 0) * (sale.quantity_sold || 1))
+            }
+          })
+        } else if (sale.spool_purchase_account && (sale.spool_purchase_account === 'Fabio' || sale.spool_purchase_account === 'Mesmerized SRLS')) {
+          // Vecchio formato per retrocompatibilità: usa production_cost_base
+          productionCostByAccount[sale.spool_purchase_account] += productionCostBase
+        }
 
         return {
           totalSales: acc.totalSales + (sale.quantity_sold || 1),
@@ -153,14 +183,15 @@ export default function Reports() {
       }
     )
 
-    // Il produttore riceve il 60% del profitto + i costi di produzione base (che ha già sostenuto)
-    const producerShare = (totals.totalProfit * 0.6) + totals.totalProductionCost
+    // Il produttore riceve il 60% del profitto (senza i costi di produzione che sono conteggiati a parte)
+    const producerShare = totals.totalProfit * 0.6
     const sellerShare = totals.totalProfit * 0.4
 
     setSummary({
       ...totals,
       producerShare,
       sellerShare,
+      productionCostByAccount,
     })
   }
 
@@ -305,7 +336,7 @@ export default function Reports() {
       {/* Grafici */}
       <div className="charts-container">
         <div className="chart-card">
-          <h3>Numero di Vendite</h3>
+          <h3>Vendite Giornaliere</h3>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" />
@@ -328,7 +359,7 @@ export default function Reports() {
         </div>
 
         <div className="chart-card">
-          <h3>Ricavato (€)</h3>
+          <h3>Fatturato (€)</h3>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" />
@@ -351,6 +382,25 @@ export default function Reports() {
         </div>
       </div>
 
+      {/* Costi di Produzione per Account */}
+      <div className="production-costs-by-account" style={{ marginBottom: '20px' }}>
+        <h2 style={{ marginBottom: '15px', fontSize: '20px' }}>Costi di Produzione per Account di Acquisto</h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '15px' }}>
+          <div style={{ background: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)' }}>
+            <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>Fabio</div>
+            <div style={{ fontSize: '24px', fontWeight: '600', color: '#2d2d2d' }}>
+              €{(summary.productionCostByAccount?.['Fabio'] || 0).toFixed(2)}
+            </div>
+          </div>
+          <div style={{ background: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)' }}>
+            <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>Mesmerized SRLS</div>
+            <div style={{ fontSize: '24px', fontWeight: '600', color: '#2d2d2d' }}>
+              €{(summary.productionCostByAccount?.['Mesmerized SRLS'] || 0).toFixed(2)}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Schede Profitto Diviso */}
       <div className="profit-split-cards">
         <div className="split-card producer">
@@ -358,8 +408,11 @@ export default function Reports() {
             <FontAwesomeIcon icon={faIndustry} size="2x" />
           </div>
           <div className="split-content">
-            <div className="split-label">Rimborsi Fabio (60% + Costo base di produzione)</div>
+            <div className="split-label">Profitto Fabio (60%)</div>
             <div className="split-value">€{summary.producerShare.toFixed(2)}</div>
+            <small style={{ fontSize: '12px', color: '#666', marginTop: '5px', display: 'block' }}>
+              I costi di produzione sono conteggiati a parte
+            </small>
           </div>
         </div>
         <div className="split-card seller">

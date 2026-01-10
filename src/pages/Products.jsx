@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 import { processAndUploadImage, deleteImageFromStorage, validateImageFile } from '../lib/imageUpload'
 import { logAction } from '../lib/logging'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faCheck, faDollarSign, faTrash, faPlus, faTimes, faMinus } from '@fortawesome/free-solid-svg-icons'
+import { faCheck, faDollarSign, faTrash, faPlus, faTimes, faMinus, faEdit } from '@fortawesome/free-solid-svg-icons'
 import ReactCountryFlag from 'react-country-flag'
 import './Products.css'
 
@@ -13,14 +13,24 @@ export default function Products() {
   const [materials, setMaterials] = useState([])
   const [models, setModels] = useState([])
   const [vatRegimes, setVatRegimes] = useState([])
+  const [spools, setSpools] = useState([])
+  const [availableSpools, setAvailableSpools] = useState([]) // Bobine disponibili per il materiale selezionato
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [sortBy, setSortBy] = useState('created_at')
+  const [statusFilter, setStatusFilter] = useState('disponibile') // 'tutti', 'disponibile', 'venduto'
   const [showModal, setShowModal] = useState(false)
   const [showSaleModal, setShowSaleModal] = useState(false)
   const [showDetailModal, setShowDetailModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editingProduct, setEditingProduct] = useState(null)
   const [selectedProduct, setSelectedProduct] = useState(null)
   const [detailProduct, setDetailProduct] = useState(null)
+  const [editFormData, setEditFormData] = useState({
+    material_id: '',
+    spool_id: '',
+  })
+  const [editAvailableSpools, setEditAvailableSpools] = useState([])
   const [productionExtraCosts, setProductionExtraCosts] = useState([])
   const [savingProductionCosts, setSavingProductionCosts] = useState(false)
   const [hoveredModel, setHoveredModel] = useState(null)
@@ -33,8 +43,8 @@ export default function Products() {
   const [formData, setFormData] = useState({
     model_id: '',
     material_id: '',
+    spool_id: '',
     sale_price: '',
-    quantity: 1,
   })
   const [multimaterialMapping, setMultimaterialMapping] = useState({
     color1: '',
@@ -42,10 +52,21 @@ export default function Products() {
     color3: '',
     color4: '',
   })
+  const [multimaterialSpools, setMultimaterialSpools] = useState({
+    color1: '',
+    color2: '',
+    color3: '',
+    color4: '',
+  })
+  const [multimaterialAvailableSpools, setMultimaterialAvailableSpools] = useState({
+    color1: [],
+    color2: [],
+    color3: [],
+    color4: [],
+  })
   const [saleFormData, setSaleFormData] = useState({ 
     final_sale_price: '',
     sales_channel: '',
-    quantity_sold: 1,
     vat_regime: '',
     extra_costs: []
   })
@@ -74,7 +95,7 @@ export default function Products() {
   }, [showModelDropdown, showMaterialDropdown])
 
   const loadData = async () => {
-    const [materialsRes, modelsRes, productsRes, vatRegimesRes] = await Promise.all([
+    const [materialsRes, modelsRes, productsRes, vatRegimesRes, spoolsRes] = await Promise.all([
       supabase.from('materials').select('*').order('brand'),
       supabase.from('models').select('*').order('name'),
       supabase
@@ -86,18 +107,117 @@ export default function Products() {
         `)
         .order('created_at', { ascending: false }),
       supabase.from('vat_regimes').select('*').order('vat_rate'),
+      supabase.from('spools').select('*').order('created_at', { ascending: false }),
     ])
 
     setMaterials(materialsRes.data || [])
     setModels(modelsRes.data || [])
     setProducts(productsRes.data || [])
     setVatRegimes(vatRegimesRes.data || [])
-    applySearchFilter(productsRes.data || [], searchQuery, sortBy)
+    setSpools(spoolsRes.data || [])
+    applySearchFilter(productsRes.data || [], searchQuery, sortBy, statusFilter)
     setLoading(false)
   }
 
-  const applySearchFilter = (productsList, query, sortValue) => {
-    let filtered = [...productsList]
+  // Carica le bobine disponibili quando cambia il materiale selezionato o il modello
+  useEffect(() => {
+    if (formData.material_id && formData.model_id) {
+      const selectedModel = models.find(m => m.id === formData.model_id)
+      if (selectedModel && !selectedModel.is_multimaterial) {
+        // Calcola il peso necessario in grammi
+        const requiredGrams = parseFloat(selectedModel.weight_kg) * 1000
+        
+        // Filtra le bobine che hanno grammi sufficienti
+        const materialSpools = spools.filter(
+          spool => spool.material_id === formData.material_id && 
+                   parseFloat(spool.remaining_grams) >= requiredGrams
+        )
+        setAvailableSpools(materialSpools)
+        
+        // Seleziona di default una bobina già consumata se presente, altrimenti la prima disponibile
+        if (materialSpools.length > 0 && !formData.spool_id) {
+          // Cerca prima una bobina già consumata (remaining_grams < 1000)
+          const consumedSpool = materialSpools.find(s => parseFloat(s.remaining_grams) < 1000)
+          const defaultSpoolId = consumedSpool ? consumedSpool.id : materialSpools[0].id
+          setFormData({ ...formData, spool_id: defaultSpoolId })
+        }
+        
+        // Reset spool_id se non è più disponibile
+        if (formData.spool_id && !materialSpools.find(s => s.id === formData.spool_id)) {
+          // Seleziona di default una bobina già consumata se presente, altrimenti la prima disponibile
+          if (materialSpools.length > 0) {
+            const consumedSpool = materialSpools.find(s => parseFloat(s.remaining_grams) < 1000)
+            const defaultSpoolId = consumedSpool ? consumedSpool.id : materialSpools[0].id
+            setFormData({ ...formData, spool_id: defaultSpoolId })
+          } else {
+            setFormData({ ...formData, spool_id: '' })
+          }
+        }
+      } else {
+        // Per modelli multimateriale o senza modello, mostra tutte le bobine con grammi > 0
+        const materialSpools = spools.filter(
+          spool => spool.material_id === formData.material_id && parseFloat(spool.remaining_grams) > 0
+        )
+        setAvailableSpools(materialSpools)
+      }
+    } else {
+      setAvailableSpools([])
+      setFormData({ ...formData, spool_id: '' })
+    }
+  }, [formData.material_id, formData.model_id, spools, models])
+
+  // Carica le bobine disponibili quando si modifica un prodotto
+  useEffect(() => {
+    if (editFormData.material_id && editingProduct) {
+      const productModel = models.find(m => m.id === editingProduct.model_id)
+      const isSold = editingProduct.status === 'venduto'
+      
+      if (productModel && !productModel.is_multimaterial) {
+        // Calcola il peso necessario in grammi
+        const requiredGrams = parseFloat(productModel.weight_kg) * 1000
+        
+        // Per prodotti venduti, mostra tutte le bobine del materiale (non scaliamo grammi)
+        // Per prodotti non venduti, filtra solo quelle con grammi sufficienti
+        const materialSpools = isSold
+          ? spools.filter(spool => spool.material_id === editFormData.material_id)
+          : spools.filter(
+              spool => spool.material_id === editFormData.material_id && 
+                       parseFloat(spool.remaining_grams) >= requiredGrams
+            )
+        setEditAvailableSpools(materialSpools)
+        
+        // Seleziona di default una bobina già consumata se presente, altrimenti la prima disponibile
+        if (materialSpools.length > 0 && !editFormData.spool_id) {
+          const consumedSpool = materialSpools.find(s => parseFloat(s.remaining_grams) < 1000)
+          const defaultSpoolId = consumedSpool ? consumedSpool.id : materialSpools[0].id
+          setEditFormData({ ...editFormData, spool_id: defaultSpoolId })
+        }
+      } else if (productModel?.is_multimaterial) {
+        // Per modelli multimateriale, mostra tutte le bobine del materiale
+        // (se venduto, anche con 0g; altrimenti solo con grammi > 0)
+        const materialSpools = isSold
+          ? spools.filter(spool => spool.material_id === editFormData.material_id)
+          : spools.filter(spool => spool.material_id === editFormData.material_id && parseFloat(spool.remaining_grams) > 0)
+        setEditAvailableSpools(materialSpools)
+      } else {
+        setEditAvailableSpools([])
+      }
+    } else {
+      setEditAvailableSpools([])
+    }
+  }, [editFormData.material_id, editingProduct, spools, models])
+
+  const applySearchFilter = (productsList, query, sortValue, statusValue = 'tutti') => {
+    // Escludi prodotti con stato "in_coda" dalla pagina Prodotti
+    let filtered = productsList.filter(product => product.status !== 'in_coda')
+    
+    // Filtro per status
+    if (statusValue === 'disponibile') {
+      filtered = filtered.filter(product => product.status === 'disponibile')
+    } else if (statusValue === 'venduto') {
+      filtered = filtered.filter(product => product.status === 'venduto')
+    }
+    // Se statusValue === 'tutti', non filtrare per status
 
     // Filtro ricerca
     if (query.trim()) {
@@ -132,10 +252,6 @@ export default function Products() {
         return (a.materials?.material_type || '').localeCompare(b.materials?.material_type || '')
       } else if (sortValue === 'materiale_decrescente') {
         return (b.materials?.material_type || '').localeCompare(a.materials?.material_type || '')
-      } else if (sortValue === 'quantità_crescente') {
-        return (a.quantity || 0) - (b.quantity || 0)
-      } else if (sortValue === 'quantità_decrescente') {
-        return (b.quantity || 0) - (a.quantity || 0)
       } else if (sortValue === 'prezzo_crescente') {
         return parseFloat(a.sale_price || 0) - parseFloat(b.sale_price || 0)
       } else if (sortValue === 'prezzo_decrescente') {
@@ -156,8 +272,8 @@ export default function Products() {
   }
 
   useEffect(() => {
-    applySearchFilter(products, searchQuery, sortBy)
-  }, [searchQuery, sortBy, products])
+    applySearchFilter(products, searchQuery, sortBy, statusFilter)
+  }, [searchQuery, sortBy, products, statusFilter])
 
   // Reset multimaterial mapping quando cambia il modello selezionato
   useEffect(() => {
@@ -169,50 +285,161 @@ export default function Products() {
         color3: '',
         color4: '',
       })
+      setMultimaterialSpools({
+        color1: '',
+        color2: '',
+        color3: '',
+        color4: '',
+      })
+      setMultimaterialAvailableSpools({
+        color1: [],
+        color2: [],
+        color3: [],
+        color4: [],
+      })
     }
   }, [formData.model_id, models])
 
-  const calculateProductionCost = (modelId, materialId, multimaterialMap = null) => {
+  // Carica le bobine disponibili per ogni materiale multimateriale selezionato (per creazione)
+  useEffect(() => {
+    const selectedModel = models.find((m) => m.id === formData.model_id)
+    if (!selectedModel?.is_multimaterial) return
+
+    const colorKeys = ['color1', 'color2', 'color3', 'color4']
+    const newAvailableSpools = { ...multimaterialAvailableSpools }
+
+    colorKeys.forEach((colorKey) => {
+      const materialId = multimaterialMapping[colorKey]
+      if (materialId) {
+        const weightGrams = parseFloat(selectedModel[`${colorKey}_weight_g`] || 0)
+        const materialSpools = spools.filter(
+          spool => spool.material_id === materialId && 
+                   parseFloat(spool.remaining_grams) >= weightGrams
+        )
+        newAvailableSpools[colorKey] = materialSpools
+
+        // Seleziona di default una bobina già consumata se presente
+        if (materialSpools.length > 0 && !multimaterialSpools[colorKey]) {
+          const consumedSpool = materialSpools.find(s => parseFloat(s.remaining_grams) < 1000)
+          const defaultSpoolId = consumedSpool ? consumedSpool.id : materialSpools[0].id
+          setMultimaterialSpools(prev => ({ ...prev, [colorKey]: defaultSpoolId }))
+        }
+      } else {
+        newAvailableSpools[colorKey] = []
+      }
+    })
+
+    setMultimaterialAvailableSpools(newAvailableSpools)
+  }, [multimaterialMapping, formData.model_id, models, spools])
+
+  // Carica le bobine disponibili per prodotti multimateriale in modifica
+  useEffect(() => {
+    if (!editingProduct) return
+    const productModel = models.find(m => m.id === editingProduct.model_id)
+    if (!productModel?.is_multimaterial) return
+
+    const isSold = editingProduct.status === 'venduto'
+    const colorKeys = ['color1', 'color2', 'color3', 'color4']
+    const newAvailableSpools = { ...multimaterialAvailableSpools }
+
+    colorKeys.forEach((colorKey) => {
+      const materialId = multimaterialMapping[colorKey]
+      if (materialId) {
+        const weightGrams = parseFloat(productModel[`${colorKey}_weight_g`] || 0)
+        // Per prodotti venduti, mostra tutte le bobine (anche con 0g)
+        // Per prodotti non venduti, filtra solo quelle con grammi sufficienti
+        const materialSpools = isSold
+          ? spools.filter(spool => spool.material_id === materialId)
+          : spools.filter(
+              spool => spool.material_id === materialId && 
+                       parseFloat(spool.remaining_grams) >= weightGrams
+            )
+        newAvailableSpools[colorKey] = materialSpools
+
+        // Seleziona di default una bobina già consumata se presente
+        if (materialSpools.length > 0 && !multimaterialSpools[colorKey]) {
+          const consumedSpool = materialSpools.find(s => parseFloat(s.remaining_grams) < 1000)
+          const defaultSpoolId = consumedSpool ? consumedSpool.id : materialSpools[0].id
+          setMultimaterialSpools(prev => ({ ...prev, [colorKey]: defaultSpoolId }))
+        }
+      } else {
+        newAvailableSpools[colorKey] = []
+      }
+    })
+
+    setMultimaterialAvailableSpools(newAvailableSpools)
+  }, [multimaterialMapping, editingProduct, models, spools])
+
+  const calculateProductionCost = (modelId, materialId, multimaterialMap = null, multimaterialSpoolsMap = null) => {
     const model = models.find((m) => m.id === modelId)
     if (!model) return '0.00'
 
-    // Se il modello è multimateriale, calcola il costo sommando tutti i materiali
+    // Se il modello è multimateriale, calcola il costo usando i prezzi delle bobine
     if (model.is_multimaterial && multimaterialMap) {
       let totalCost = 0
       
       // Colore 1
       if (model.color1_weight_g && multimaterialMap.color1) {
-        const material1 = materials.find((m) => m.id === multimaterialMap.color1)
-        if (material1) {
-          const weightKg1 = parseFloat(model.color1_weight_g) / 1000
-          totalCost += weightKg1 * parseFloat(material1.cost_per_kg)
+        const weightKg1 = parseFloat(model.color1_weight_g) / 1000
+        if (multimaterialSpoolsMap?.color1) {
+          const spool1 = spools.find(s => s.id === multimaterialSpoolsMap.color1)
+          if (spool1) {
+            totalCost += weightKg1 * parseFloat(spool1.price || 0)
+          }
+        } else {
+          // Fallback al costo del materiale se bobina non selezionata
+          const material1 = materials.find((m) => m.id === multimaterialMap.color1)
+          if (material1) {
+            totalCost += weightKg1 * parseFloat(material1.cost_per_kg || 0)
+          }
         }
       }
       
       // Colore 2
       if (model.color2_weight_g && multimaterialMap.color2) {
-        const material2 = materials.find((m) => m.id === multimaterialMap.color2)
-        if (material2) {
-          const weightKg2 = parseFloat(model.color2_weight_g) / 1000
-          totalCost += weightKg2 * parseFloat(material2.cost_per_kg)
+        const weightKg2 = parseFloat(model.color2_weight_g) / 1000
+        if (multimaterialSpoolsMap?.color2) {
+          const spool2 = spools.find(s => s.id === multimaterialSpoolsMap.color2)
+          if (spool2) {
+            totalCost += weightKg2 * parseFloat(spool2.price || 0)
+          }
+        } else {
+          const material2 = materials.find((m) => m.id === multimaterialMap.color2)
+          if (material2) {
+            totalCost += weightKg2 * parseFloat(material2.cost_per_kg || 0)
+          }
         }
       }
       
       // Colore 3
       if (model.color3_weight_g && multimaterialMap.color3) {
-        const material3 = materials.find((m) => m.id === multimaterialMap.color3)
-        if (material3) {
-          const weightKg3 = parseFloat(model.color3_weight_g) / 1000
-          totalCost += weightKg3 * parseFloat(material3.cost_per_kg)
+        const weightKg3 = parseFloat(model.color3_weight_g) / 1000
+        if (multimaterialSpoolsMap?.color3) {
+          const spool3 = spools.find(s => s.id === multimaterialSpoolsMap.color3)
+          if (spool3) {
+            totalCost += weightKg3 * parseFloat(spool3.price || 0)
+          }
+        } else {
+          const material3 = materials.find((m) => m.id === multimaterialMap.color3)
+          if (material3) {
+            totalCost += weightKg3 * parseFloat(material3.cost_per_kg || 0)
+          }
         }
       }
       
       // Colore 4
       if (model.color4_weight_g && multimaterialMap.color4) {
-        const material4 = materials.find((m) => m.id === multimaterialMap.color4)
-        if (material4) {
-          const weightKg4 = parseFloat(model.color4_weight_g) / 1000
-          totalCost += weightKg4 * parseFloat(material4.cost_per_kg)
+        const weightKg4 = parseFloat(model.color4_weight_g) / 1000
+        if (multimaterialSpoolsMap?.color4) {
+          const spool4 = spools.find(s => s.id === multimaterialSpoolsMap.color4)
+          if (spool4) {
+            totalCost += weightKg4 * parseFloat(spool4.price || 0)
+          }
+        } else {
+          const material4 = materials.find((m) => m.id === multimaterialMap.color4)
+          if (material4) {
+            totalCost += weightKg4 * parseFloat(material4.cost_per_kg || 0)
+          }
         }
       }
       
@@ -222,7 +449,7 @@ export default function Products() {
     // Calcolo normale per modelli non multimateriale
     const material = materials.find((m) => m.id === materialId)
     if (model && material) {
-      return (parseFloat(model.weight_kg) * parseFloat(material.cost_per_kg)).toFixed(2)
+      return (parseFloat(model.weight_kg) * parseFloat(material.cost_per_kg || 0)).toFixed(2)
     }
     return '0.00'
   }
@@ -245,6 +472,7 @@ export default function Products() {
     let productSku = ''
     let materialId = null
     let mappingForDb = null
+    let spoolUpdates = []
 
     if (model.is_multimaterial) {
       // Validazione per modelli multimateriale
@@ -273,14 +501,35 @@ export default function Products() {
         }
       }
 
-      // Crea il mapping per il database
+      // Validazione bobine per prodotti multimateriale
+      for (const { color } of selectedMaterials) {
+        const colorKey = `color${color}`
+        if (!multimaterialSpools[colorKey]) {
+          alert(`Seleziona una bobina per Colore ${color}`)
+          return
+        }
+        const selectedSpool = spools.find(s => s.id === multimaterialSpools[colorKey])
+        if (!selectedSpool) {
+          alert(`Bobina per Colore ${color} non trovata`)
+          return
+        }
+        const weightGrams = parseFloat(model[`${colorKey}_weight_g`] || 0)
+        const remainingGrams = parseFloat(selectedSpool.remaining_grams)
+        if (weightGrams > remainingGrams) {
+          alert(`La bobina per Colore ${color} ha solo ${remainingGrams.toFixed(2)}g disponibili, ma richiede ${weightGrams.toFixed(2)}g`)
+          return
+        }
+      }
+
+      // Crea il mapping per il database includendo le bobine
       mappingForDb = selectedMaterials.map(({ color, id }) => ({
         color,
         material_id: id,
+        spool_id: multimaterialSpools[`color${color}`] || null,
       }))
 
-      // Calcola il costo di produzione
-      productionCost = parseFloat(calculateProductionCost(formData.model_id, null, multimaterialMapping))
+      // Calcola il costo di produzione usando i prezzi delle bobine
+      productionCost = parseFloat(calculateProductionCost(formData.model_id, null, multimaterialMapping, multimaterialSpools))
 
       // Genera SKU: SKU modello + codici materiali separati da "-"
       const materialCodes = selectedMaterials
@@ -291,6 +540,53 @@ export default function Products() {
 
       // Usa il primo materiale come material_id principale (per retrocompatibilità)
       materialId = mappingForDb[0].material_id
+
+      // Memorizza i dati delle bobine per eventuale rollback
+      const spoolUpdates = []
+      
+      // Scala i grammi da ogni bobina utilizzata
+      for (const { color } of selectedMaterials) {
+        const colorKey = `color${color}`
+        const selectedSpoolId = multimaterialSpools[colorKey]
+        const selectedSpool = spools.find(s => s.id === selectedSpoolId)
+        if (selectedSpool) {
+          const weightGrams = parseFloat(model[`${colorKey}_weight_g`] || 0)
+          const remainingGrams = parseFloat(selectedSpool.remaining_grams)
+          const newRemainingGrams = remainingGrams - weightGrams
+          
+          // Memorizza per eventuale rollback
+          spoolUpdates.push({
+            spoolId: selectedSpoolId,
+            oldGrams: remainingGrams,
+            newGrams: newRemainingGrams,
+            weightGrams: weightGrams
+          })
+          
+          const { error: spoolError } = await supabase
+            .from('spools')
+            .update({ remaining_grams: newRemainingGrams })
+            .eq('id', selectedSpoolId)
+
+          if (spoolError) {
+            alert(`Errore durante l'aggiornamento della bobina per Colore ${color}: ` + spoolError.message)
+            // Ripristina le bobine già aggiornate
+            for (const update of spoolUpdates) {
+              await supabase
+                .from('spools')
+                .update({ remaining_grams: update.oldGrams })
+                .eq('id', update.spoolId)
+            }
+            return
+          }
+          
+          // Aggiorna lo stato locale per riflettere immediatamente il cambiamento
+          setSpools(prevSpools => prevSpools.map(spool => 
+            spool.id === selectedSpoolId 
+              ? { ...spool, remaining_grams: newRemainingGrams }
+              : spool
+          ))
+        }
+      }
     } else {
       // Logica normale per modelli non multimateriale
       const material = materials.find((m) => m.id === formData.material_id)
@@ -307,7 +603,66 @@ export default function Products() {
 
       materialId = formData.material_id
       productSku = `${model.sku}-${material.code}`
-      productionCost = parseFloat(model.weight_kg) * parseFloat(material.cost_per_kg)
+    }
+
+    // Validazione bobina per prodotti non multimateriale
+    let selectedSpoolId = null
+    let spoolPrice = null
+    let spoolUpdate = null
+    if (!model.is_multimaterial) {
+      if (!formData.spool_id) {
+        alert('Seleziona una bobina per questo materiale')
+        return
+      }
+
+      const selectedSpool = spools.find(s => s.id === formData.spool_id)
+      if (!selectedSpool) {
+        alert('Bobina selezionata non trovata')
+        return
+      }
+
+      // Calcola il peso in grammi del prodotto
+      const weightGrams = parseFloat(model.weight_kg) * 1000
+      const remainingGrams = parseFloat(selectedSpool.remaining_grams)
+
+      if (weightGrams > remainingGrams) {
+        alert(`La bobina selezionata ha solo ${remainingGrams.toFixed(2)}g disponibili, ma il prodotto richiede ${weightGrams.toFixed(2)}g`)
+        return
+      }
+
+      selectedSpoolId = formData.spool_id
+      spoolPrice = parseFloat(selectedSpool.price || 0)
+
+      // Calcola il costo di produzione usando il prezzo della bobina
+      productionCost = parseFloat(model.weight_kg) * spoolPrice
+
+      // Scala i grammi dalla bobina
+      const newRemainingGrams = remainingGrams - weightGrams
+      const { error: spoolError } = await supabase
+        .from('spools')
+        .update({ remaining_grams: newRemainingGrams })
+        .eq('id', selectedSpoolId)
+
+      if (spoolError) {
+        alert('Errore durante l\'aggiornamento della bobina: ' + spoolError.message)
+        return
+      }
+      
+      // Memorizza per eventuale rollback
+      spoolUpdate = {
+        spoolId: selectedSpoolId,
+        oldGrams: remainingGrams,
+        newGrams: newRemainingGrams,
+        weightGrams: weightGrams
+      }
+      
+      // Aggiorna lo stato locale per riflettere immediatamente il cambiamento
+      const updatedSpools = spools.map(spool => 
+        spool.id === selectedSpoolId 
+          ? { ...spool, remaining_grams: newRemainingGrams }
+          : spool
+      )
+      setSpools(updatedSpools)
     }
 
     const {
@@ -318,19 +673,34 @@ export default function Products() {
       {
         model_id: formData.model_id,
         material_id: materialId,
+        spool_id: model.is_multimaterial ? null : selectedSpoolId, // Per multimateriale, le bobine sono nel mapping
         sku: productSku,
         sale_price: parseFloat(formData.sale_price),
         production_cost: productionCost,
         packaging_cost: 0,
         administrative_cost: 0,
         status: 'in_coda',
-        quantity: parseInt(formData.quantity) || 1,
+        quantity: 1, // Prodotti sempre unici
         multimaterial_mapping: mappingForDb,
         created_by: user?.id,
       },
     ]).select().single()
 
     if (error) {
+      // Ripristina i grammi se l'inserimento del prodotto fallisce
+      if (model.is_multimaterial && spoolUpdates) {
+        for (const update of spoolUpdates) {
+          await supabase
+            .from('spools')
+            .update({ remaining_grams: update.oldGrams })
+            .eq('id', update.spoolId)
+        }
+      } else if (!model.is_multimaterial && spoolUpdate) {
+        await supabase
+          .from('spools')
+          .update({ remaining_grams: spoolUpdate.oldGrams })
+          .eq('id', spoolUpdate.spoolId)
+      }
       alert('Errore durante la creazione: ' + error.message)
     } else {
       // Log dell'operazione
@@ -339,7 +709,7 @@ export default function Products() {
         'prodotto',
         data.id,
         productSku,
-        { product_data: { sku: productSku, model_id: formData.model_id, material_id: materialId } }
+        { product_data: { sku: productSku, model_id: formData.model_id, material_id: materialId, spool_id: selectedSpoolId } }
       )
       await loadData()
       setShowModal(false)
@@ -355,7 +725,6 @@ export default function Products() {
       setSaleFormData({ 
         final_sale_price: product?.sale_price || '',
         sales_channel: '',
-        quantity_sold: 1,
         vat_regime: '',
         extra_costs: product?.extra_costs || []
       })
@@ -391,11 +760,12 @@ export default function Products() {
     e.preventDefault()
     if (!selectedProduct) return
 
-    const quantitySold = parseInt(saleFormData.quantity_sold) || 1
+    // Prodotti sono sempre unici, quindi quantity_sold è sempre 1
+    const quantitySold = 1
     const currentQuantity = selectedProduct.quantity || 0
 
-    if (quantitySold > currentQuantity) {
-      alert(`La quantità venduta (${quantitySold}) non può essere maggiore della quantità disponibile (${currentQuantity})`)
+    if (currentQuantity === 0) {
+      alert('Questo prodotto è già stato venduto')
       return
     }
 
@@ -454,6 +824,105 @@ export default function Products() {
       // profit è il profitto totale (ricavo - costi totali - IVA da versare)
       const profit = revenue - (totalCostsPerProduct * quantitySold) - vatAmount
 
+      // Calcola il breakdown dei costi di produzione per account
+      // Questo mappa ogni materiale/bobina utilizzata al suo account di acquisto
+      let productionCostByAccount = []
+      let spoolPurchaseAccount = null
+      let spoolId = null
+      
+      // Controlla se il prodotto è multimateriale
+      const productModel = models.find(m => m.id === selectedProduct.model_id)
+      const isMultimaterial = productModel?.is_multimaterial
+      
+      if (isMultimaterial && selectedProduct.multimaterial_mapping) {
+        // Per prodotti multimateriale, calcola il costo per ogni materiale/bobina
+        const mapping = Array.isArray(selectedProduct.multimaterial_mapping) 
+          ? selectedProduct.multimaterial_mapping 
+          : []
+        
+        // Raggruppa i costi per account
+        const costByAccountMap = {}
+        
+        // Recupera tutte le bobine necessarie dal database in una singola query
+        const spoolIds = mapping.map(m => m.spool_id).filter(Boolean)
+        if (spoolIds.length > 0) {
+          const { data: spoolsData } = await supabase
+            .from('spools')
+            .select('id, purchase_account, price')
+            .in('id', spoolIds)
+          
+          const spoolsMap = {}
+          if (spoolsData) {
+            spoolsData.forEach(spool => {
+              spoolsMap[spool.id] = spool
+            })
+          }
+          
+          for (const colorMapping of mapping) {
+            if (!colorMapping.spool_id) continue
+            
+            const spool = spoolsMap[colorMapping.spool_id]
+            if (!spool || !spool.purchase_account) continue
+            
+            // Trova il peso per questo colore
+            const colorKey = `color${colorMapping.color}`
+            const weightGrams = parseFloat(productModel[`${colorKey}_weight_g`] || 0)
+            const weightKg = weightGrams / 1000
+            
+            // Calcola il costo per questo materiale
+            const costForThisMaterial = weightKg * parseFloat(spool.price || 0)
+            
+            // Aggiungi al totale per questo account
+            if (!costByAccountMap[spool.purchase_account]) {
+              costByAccountMap[spool.purchase_account] = {
+                account: spool.purchase_account,
+                cost: 0
+              }
+            }
+            
+            costByAccountMap[spool.purchase_account].cost += costForThisMaterial
+          }
+        }
+        
+        // Converti la mappa in array
+        productionCostByAccount = Object.values(costByAccountMap).map(item => ({
+          account: item.account,
+          cost: parseFloat(item.cost.toFixed(2))
+        }))
+        
+        // Per retrocompatibilità, mantieni spool_id e spool_purchase_account del primo colore
+        if (mapping.length > 0 && mapping[0].spool_id) {
+          spoolId = mapping[0].spool_id
+          const { data: firstSpoolData } = await supabase
+            .from('spools')
+            .select('purchase_account')
+            .eq('id', mapping[0].spool_id)
+            .single()
+          spoolPurchaseAccount = firstSpoolData?.purchase_account || null
+        }
+      } else if (selectedProduct.spool_id) {
+        // Per prodotti non multimateriale, usa spool_id direttamente
+        spoolId = selectedProduct.spool_id
+        const { data: spoolData } = await supabase
+          .from('spools')
+          .select('purchase_account, price')
+          .eq('id', selectedProduct.spool_id)
+          .single()
+        
+        spoolPurchaseAccount = spoolData?.purchase_account || null
+        
+        // Calcola il costo per questo account
+        if (spoolData && spoolData.purchase_account) {
+          const weightKg = productModel ? parseFloat(productModel.weight_kg || 0) : 0
+          const cost = weightKg * parseFloat(spoolData.price || 0)
+          
+          productionCostByAccount = [{
+            account: spoolData.purchase_account,
+            cost: parseFloat(cost.toFixed(2))
+          }]
+        }
+      }
+
       // Prepara i dati per la tabella sales
       const saleData = {
         product_id: selectedProduct.id,
@@ -466,6 +935,9 @@ export default function Products() {
         material_type: selectedProduct.materials?.material_type || null,
         material_color: selectedProduct.materials?.color || null,
         material_color_hex: selectedProduct.materials?.color_hex || null,
+        spool_id: spoolId || selectedProduct.spool_id || null,
+        spool_purchase_account: spoolPurchaseAccount,
+        production_cost_by_account: productionCostByAccount,
         quantity_sold: quantitySold,
         sale_price: salePrice,
         sales_channel: saleFormData.sales_channel,
@@ -519,11 +991,474 @@ export default function Products() {
       await loadData()
       setShowSaleModal(false)
       setSelectedProduct(null)
-      setSaleFormData({ final_sale_price: '', sales_channel: '', quantity_sold: 1, vat_regime: '', extra_costs: [] })
+      setSaleFormData({ final_sale_price: '', sales_channel: '', vat_regime: '', extra_costs: [] })
       alert('Vendita registrata con successo!')
     } catch (error) {
       console.error('Error:', error)
       alert('Errore durante la vendita: ' + error.message)
+    }
+  }
+
+  const handleEditProduct = (product) => {
+    // Permetti modifica anche per prodotti multimateriale e venduti
+    const productModel = models.find(m => m.id === product.model_id)
+    const isMultimaterial = productModel?.is_multimaterial
+    const isSold = product.status === 'venduto'
+    
+    setEditingProduct(product)
+    
+    if (isMultimaterial) {
+      // Per prodotti multimateriale, carica il mapping
+      const mapping = Array.isArray(product.multimaterial_mapping) 
+        ? product.multimaterial_mapping 
+        : []
+      
+      const multimaterialMapping = {}
+      const multimaterialSpoolsMapping = {}
+      
+      mapping.forEach(item => {
+        if (item.color) {
+          const colorKey = `color${item.color}`
+          multimaterialMapping[colorKey] = item.material_id || ''
+          multimaterialSpoolsMapping[colorKey] = item.spool_id || ''
+        }
+      })
+      
+      setMultimaterialMapping({
+        color1: multimaterialMapping.color1 || '',
+        color2: multimaterialMapping.color2 || '',
+        color3: multimaterialMapping.color3 || '',
+        color4: multimaterialMapping.color4 || '',
+      })
+      setMultimaterialSpools({
+        color1: multimaterialSpoolsMapping.color1 || '',
+        color2: multimaterialSpoolsMapping.color2 || '',
+        color3: multimaterialSpoolsMapping.color3 || '',
+        color4: multimaterialSpoolsMapping.color4 || '',
+      })
+    }
+    
+    setEditFormData({
+      material_id: product.material_id || '',
+      spool_id: product.spool_id || '',
+    })
+    
+    setShowEditModal(true)
+  }
+
+  const handleUpdateProduct = async (e) => {
+    e.preventDefault()
+    
+    if (!editingProduct) return
+    
+    const productModel = models.find(m => m.id === editingProduct.model_id)
+    if (!productModel) {
+      alert('Modello non trovato')
+      return
+    }
+    
+    const isSold = editingProduct.status === 'venduto'
+    const isMultimaterial = productModel.is_multimaterial
+    
+    try {
+      let newProductionCost = 0
+      let updateData = {}
+      let productionCostByAccount = []
+      let mappingForDb = null // Dichiarato all'inizio per essere disponibile in tutto il blocco
+      
+      if (isMultimaterial) {
+        // Gestione prodotti multimateriale
+        const selectedMaterials = [
+          { color: 1, materialId: multimaterialMapping.color1 },
+          { color: 2, materialId: multimaterialMapping.color2 },
+          ...(multimaterialMapping.color3 ? [{ color: 3, materialId: multimaterialMapping.color3 }] : []),
+          ...(multimaterialMapping.color4 ? [{ color: 4, materialId: multimaterialMapping.color4 }] : []),
+        ].filter(item => item.materialId)
+        
+        if (selectedMaterials.length === 0) {
+          alert('Seleziona almeno un materiale')
+          return
+        }
+        
+        // Valida che tutte le bobine siano selezionate
+        for (const { color } of selectedMaterials) {
+          const colorKey = `color${color}`
+          if (!multimaterialSpools[colorKey]) {
+            alert(`Seleziona una bobina per Colore ${color}`)
+            return
+          }
+        }
+        
+        // Calcola costi per ogni bobina e raggruppa per account
+        const costByAccountMap = {}
+        mappingForDb = []
+        
+        for (const { color, materialId } of selectedMaterials) {
+          const colorKey = `color${color}`
+          const spoolId = multimaterialSpools[colorKey]
+          const spool = spools.find(s => s.id === spoolId)
+          
+          if (!spool) {
+            alert(`Bobina per Colore ${color} non trovata`)
+            return
+          }
+          
+          const weightGrams = parseFloat(productModel[`${colorKey}_weight_g`] || 0)
+          const weightKg = weightGrams / 1000
+          const costForThisMaterial = weightKg * parseFloat(spool.price || 0)
+          
+          newProductionCost += costForThisMaterial
+          
+          // Raggruppa per account
+          if (spool.purchase_account) {
+            if (!costByAccountMap[spool.purchase_account]) {
+              costByAccountMap[spool.purchase_account] = { account: spool.purchase_account, cost: 0 }
+            }
+            costByAccountMap[spool.purchase_account].cost += costForThisMaterial
+          }
+          
+          mappingForDb.push({
+            color,
+            material_id: materialId,
+            spool_id: spoolId,
+          })
+        }
+        
+        productionCostByAccount = Object.values(costByAccountMap).map(item => ({
+          account: item.account,
+          cost: parseFloat(item.cost.toFixed(2))
+        }))
+        
+        updateData = {
+          material_id: mappingForDb[0].material_id, // Primo materiale per retrocompatibilità
+          multimaterial_mapping: mappingForDb,
+          production_cost: newProductionCost,
+        }
+        
+        // Per prodotti venduti, non scalare i grammi
+        if (!isSold) {
+          // Gestione grammi per prodotti non venduti
+          const oldMapping = Array.isArray(editingProduct.multimaterial_mapping) 
+            ? editingProduct.multimaterial_mapping 
+            : []
+          
+          // Ripristina grammi dalle vecchie bobine
+          for (const oldItem of oldMapping) {
+            if (oldItem.spool_id) {
+              const newMappingItem = mappingForDb.find(m => m.color === oldItem.color)
+              if (!newMappingItem || newMappingItem.spool_id !== oldItem.spool_id) {
+                // La bobina è cambiata, ripristina grammi
+                const weightGrams = parseFloat(productModel[`color${oldItem.color}_weight_g`] || 0)
+                const { data: oldSpoolData } = await supabase
+                  .from('spools')
+                  .select('remaining_grams')
+                  .eq('id', oldItem.spool_id)
+                  .single()
+                
+                if (oldSpoolData) {
+                  const restoredGrams = parseFloat(oldSpoolData.remaining_grams || 0) + weightGrams
+                  await supabase
+                    .from('spools')
+                    .update({ remaining_grams: restoredGrams })
+                    .eq('id', oldItem.spool_id)
+                }
+              }
+            }
+          }
+          
+          // Scala grammi dalle nuove bobine (solo quelle che sono cambiate)
+          for (const { color, spool_id } of mappingForDb) {
+            const oldItem = oldMapping.find(m => m.color === color)
+            if (!oldItem || oldItem.spool_id !== spool_id) {
+              const weightGrams = parseFloat(productModel[`color${color}_weight_g`] || 0)
+              const { data: newSpoolData } = await supabase
+                .from('spools')
+                .select('remaining_grams')
+                .eq('id', spool_id)
+                .single()
+              
+              if (newSpoolData) {
+                const currentGrams = parseFloat(newSpoolData.remaining_grams || 0)
+                if (weightGrams > currentGrams) {
+                  alert(`La bobina per Colore ${color} ha solo ${currentGrams.toFixed(2)}g disponibili, ma richiede ${weightGrams.toFixed(2)}g`)
+                  return
+                }
+                
+                const newGrams = currentGrams - weightGrams
+                await supabase
+                  .from('spools')
+                  .update({ remaining_grams: newGrams })
+                  .eq('id', spool_id)
+              }
+            }
+          }
+        }
+      } else {
+        // Gestione prodotti non multimateriale
+        if (!editFormData.material_id) {
+          alert('Seleziona un materiale')
+          return
+        }
+        
+        if (!editFormData.spool_id) {
+          alert('Seleziona una bobina')
+          return
+        }
+        
+        const selectedSpool = spools.find(s => s.id === editFormData.spool_id)
+        if (!selectedSpool) {
+          alert('Bobina non trovata')
+          return
+        }
+        
+        const weightGrams = parseFloat(productModel.weight_kg) * 1000
+        const spoolPrice = parseFloat(selectedSpool.price || 0)
+        newProductionCost = parseFloat(productModel.weight_kg) * spoolPrice
+        
+        productionCostByAccount = selectedSpool.purchase_account ? [{
+          account: selectedSpool.purchase_account,
+          cost: parseFloat(newProductionCost.toFixed(2))
+        }] : []
+        
+        updateData = {
+          material_id: editFormData.material_id,
+          spool_id: editFormData.spool_id,
+          production_cost: newProductionCost,
+        }
+        
+        // Per prodotti venduti, non scalare i grammi
+        if (!isSold) {
+          // Gestione grammi per prodotti non venduti
+          const hadOldSpool = editingProduct.spool_id && editingProduct.spool_id !== editFormData.spool_id
+          
+          if (hadOldSpool) {
+            // Ripristina grammi dalla bobina vecchia
+            const { data: oldSpoolData } = await supabase
+              .from('spools')
+              .select('remaining_grams')
+              .eq('id', editingProduct.spool_id)
+              .single()
+            
+            if (oldSpoolData) {
+              const restoredGrams = parseFloat(oldSpoolData.remaining_grams || 0) + weightGrams
+              await supabase
+                .from('spools')
+                .update({ remaining_grams: restoredGrams })
+                .eq('id', editingProduct.spool_id)
+            }
+          }
+          
+          // Verifica disponibilità e scala grammi dalla bobina nuova (solo per prodotti non venduti)
+          if (!isSold) {
+            const { data: newSpoolData } = await supabase
+              .from('spools')
+              .select('remaining_grams')
+              .eq('id', editFormData.spool_id)
+              .single()
+            
+            if (newSpoolData) {
+              const currentGrams = parseFloat(newSpoolData.remaining_grams || 0)
+              if (weightGrams > currentGrams) {
+                alert(`La bobina selezionata ha solo ${currentGrams.toFixed(2)}g disponibili, ma il prodotto richiede ${weightGrams.toFixed(2)}g`)
+                return
+              }
+              
+              const newGrams = currentGrams - weightGrams
+              await supabase
+                .from('spools')
+                .update({ remaining_grams: newGrams })
+                .eq('id', editFormData.spool_id)
+            }
+          }
+        }
+      }
+      
+      // Aggiorna il prodotto
+      const { error: updateError } = await supabase
+        .from('products')
+        .update(updateData)
+        .eq('id', editingProduct.id)
+      
+      if (updateError) {
+        throw new Error('Errore durante l\'aggiornamento del prodotto: ' + updateError.message)
+      }
+      
+      // Se il prodotto è venduto, aggiorna anche la vendita associata (più recente)
+      if (isSold) {
+        const { data: salesDataArray, error: salesFetchError } = await supabase
+          .from('sales')
+          .select('*')
+          .eq('product_id', editingProduct.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+        
+        if (salesFetchError) {
+          console.error('Errore nel recupero della vendita:', salesFetchError)
+          throw new Error('Errore nel recupero della vendita associata: ' + salesFetchError.message)
+        }
+        
+        if (!salesDataArray || salesDataArray.length === 0) {
+          console.warn('Nessuna vendita trovata per il prodotto:', editingProduct.id)
+          // Non blocchiamo l'operazione se non c'è una vendita, ma avvisiamo l'utente
+          alert('Il prodotto è stato aggiornato, ma non è stata trovata una vendita associata. Questo può accadere se il prodotto è stato marcato come venduto manualmente.')
+        } else {
+          const salesData = salesDataArray[0]
+          
+          // Recupera i dati aggiornati del materiale e modello
+          const updatedMaterial = materials.find(m => m.id === updateData.material_id)
+          
+          // Ricalcola i costi per la vendita
+          const productionCostBase = newProductionCost
+          const productionExtraCosts = editingProduct.production_extra_costs || []
+          const productionExtraTotal = productionExtraCosts.reduce((sum, cost) => sum + (parseFloat(cost.amount || 0) || 0), 0)
+          const totalProductionCost = productionCostBase + productionExtraTotal
+          
+          // Ricalcola il profitto (revenue - total_costs)
+          const quantitySold = salesData.quantity_sold || 1
+          if (quantitySold <= 0) {
+            throw new Error('Quantità venduta non valida')
+          }
+          
+          const revenue = parseFloat(salesData.revenue || 0)
+          const packagingCost = parseFloat(salesData.packaging_cost || 0) * quantitySold
+          const administrativeCost = parseFloat(salesData.administrative_cost || 0) * quantitySold
+          const promotionCost = parseFloat(salesData.promotion_cost || 0) * quantitySold
+          const extraCostsTotal = (salesData.extra_costs || []).reduce((sum, cost) => sum + (parseFloat(cost.amount || 0) || 0), 0) * quantitySold
+          const totalCosts = (totalProductionCost * quantitySold) + packagingCost + administrativeCost + promotionCost + extraCostsTotal
+          const profit = revenue - totalCosts - (parseFloat(salesData.vat_amount || 0))
+          
+          // Determina spool_id e spool_purchase_account per retrocompatibilità
+          let spoolIdForSale = null
+          let spoolPurchaseAccountForSale = null
+          
+          if (isMultimaterial && mappingForDb && mappingForDb.length > 0) {
+            // Per prodotti multimateriale, usa la bobina del primo colore per retrocompatibilità
+            spoolIdForSale = mappingForDb[0]?.spool_id || null
+            if (spoolIdForSale) {
+              const firstSpool = spools.find(s => s.id === spoolIdForSale)
+              spoolPurchaseAccountForSale = firstSpool?.purchase_account || null
+            }
+          } else if (editFormData.spool_id) {
+            spoolIdForSale = editFormData.spool_id
+            const selectedSpool = spools.find(s => s.id === editFormData.spool_id)
+            spoolPurchaseAccountForSale = selectedSpool?.purchase_account || null
+          }
+          
+          // Verifica che tutti i valori numerici siano validi
+          const validatedProductionCostBase = isNaN(productionCostBase) || productionCostBase < 0 ? 0 : parseFloat(productionCostBase.toFixed(2))
+          const validatedTotalProductionCost = isNaN(totalProductionCost) || totalProductionCost < 0 ? 0 : parseFloat(totalProductionCost.toFixed(2))
+          const validatedTotalCostsPerUnit = isNaN(totalCosts) || totalCosts < 0 ? 0 : parseFloat((totalCosts / quantitySold).toFixed(2))
+          const validatedProfit = isNaN(profit) ? 0 : parseFloat(profit.toFixed(2))
+          
+          // Verifica e normalizza production_cost_by_account
+          const normalizedProductionCostByAccount = Array.isArray(productionCostByAccount) 
+            ? productionCostByAccount.map(item => ({
+                account: item.account,
+                cost: parseFloat(item.cost || 0)
+              })).filter(item => item.account && !isNaN(item.cost) && item.cost >= 0)
+            : []
+          
+          // Aggiorna la vendita con i nuovi dati
+          // Nota: total_costs è per singolo prodotto, nei report viene moltiplicato per quantity_sold
+          const salesUpdateData = {
+            production_cost_base: validatedProductionCostBase,
+            total_production_cost: validatedTotalProductionCost,
+            total_costs: validatedTotalCostsPerUnit,
+            profit: validatedProfit,
+            spool_id: spoolIdForSale,
+            spool_purchase_account: spoolPurchaseAccountForSale,
+          }
+          
+          // Aggiungi production_cost_by_account solo se la colonna esiste (gestione retrocompatibilità)
+          // Se l'aggiornamento fallisce con questo campo, verrà eseguito senza
+          if (normalizedProductionCostByAccount.length > 0) {
+            salesUpdateData.production_cost_by_account = normalizedProductionCostByAccount
+          }
+          
+          // Aggiorna anche i dati del materiale se il materiale è cambiato
+          if (updatedMaterial) {
+            salesUpdateData.material_id = updateData.material_id
+            salesUpdateData.material_brand = updatedMaterial.brand || null
+            salesUpdateData.material_type = updatedMaterial.material_type || null
+            salesUpdateData.material_color = updatedMaterial.color || null
+            salesUpdateData.material_color_hex = updatedMaterial.color_hex || null
+          }
+          
+          // Log dei dati prima dell'update per debugging
+          console.log('Aggiornamento vendita:', {
+            salesId: salesData.id,
+            updateData: salesUpdateData,
+            productionCostByAccount,
+          })
+          
+          let salesUpdateError = null
+          
+          // Primo tentativo: aggiorna con tutti i campi inclusi production_cost_by_account
+          const { error: firstError } = await supabase
+            .from('sales')
+            .update(salesUpdateData)
+            .eq('id', salesData.id)
+          
+          // Se l'errore è relativo alla colonna production_cost_by_account, riprova senza
+          if (firstError && firstError.message.includes('production_cost_by_account')) {
+            console.warn('Colonna production_cost_by_account non trovata, aggiorno senza questo campo')
+            const { production_cost_by_account, ...salesUpdateDataWithoutAccount } = salesUpdateData
+            const { error: secondError } = await supabase
+              .from('sales')
+              .update(salesUpdateDataWithoutAccount)
+              .eq('id', salesData.id)
+            
+            if (secondError) {
+              salesUpdateError = secondError
+            } else {
+              console.log('Vendita aggiornata senza production_cost_by_account (colonna non esistente nel database)')
+              alert('Il prodotto è stato aggiornato. La colonna production_cost_by_account non esiste nel database. Esegui lo script SQL add_production_cost_by_account.sql per aggiungerla.')
+            }
+          } else if (firstError) {
+            salesUpdateError = firstError
+          } else {
+            console.log('Vendita aggiornata con successo:', salesData.id)
+          }
+          
+          if (salesUpdateError) {
+            console.error('Errore durante l\'aggiornamento della vendita:', salesUpdateError)
+            console.error('Dati che stavamo cercando di aggiornare:', salesUpdateData)
+            console.error('Dati della vendita originale:', salesData)
+            // Mostriamo l'errore specifico all'utente ma non blocchiamo l'operazione
+            // Il prodotto è già stato aggiornato, quindi è meglio informare l'utente
+            alert(`Il prodotto è stato aggiornato con successo, ma c'è stato un errore nell'aggiornamento della vendita associata.\n\nErrore: ${salesUpdateError.message}\n\nID Vendita: ${salesData.id}\n\nDovrai aggiornare manualmente i costi nella vendita o nei report. Controlla la console del browser per maggiori dettagli.`)
+          }
+        }
+      }
+      
+      // Log dell'operazione
+      await logAction(
+        'modifica_prodotto',
+        'prodotto',
+        editingProduct.id,
+        `${editingProduct.sku} - Materiale/Bobina aggiornati`,
+        { 
+          old_material_id: editingProduct.material_id,
+          new_material_id: updateData.material_id,
+          old_spool_id: editingProduct.spool_id,
+          new_spool_id: isMultimaterial ? null : updateData.spool_id,
+          old_production_cost: editingProduct.production_cost,
+          new_production_cost: newProductionCost,
+          is_sold: isSold,
+          is_multimaterial: isMultimaterial
+        }
+      )
+      
+      await loadData()
+      setShowEditModal(false)
+      setEditingProduct(null)
+      setEditFormData({ material_id: '', spool_id: '' })
+      setMultimaterialMapping({ color1: '', color2: '', color3: '', color4: '' })
+      setMultimaterialSpools({ color1: '', color2: '', color3: '', color4: '' })
+      alert('Prodotto aggiornato con successo!' + (isSold ? ' La vendita associata è stata aggiornata con i nuovi costi.' : ''))
+    } catch (error) {
+      console.error('Error:', error)
+      alert('Errore durante l\'aggiornamento: ' + error.message)
     }
   }
 
@@ -685,25 +1620,6 @@ export default function Products() {
     }
   }
 
-  const handleQuantityChange = async (productId, newQuantity) => {
-    if (newQuantity < 0) return
-
-    try {
-      const { error } = await supabase
-        .from('products')
-        .update({ quantity: newQuantity })
-        .eq('id', productId)
-
-      if (error) {
-        throw error
-      }
-
-      await loadData()
-    } catch (error) {
-      console.error('Error updating quantity:', error)
-      alert('Errore durante l\'aggiornamento della quantità')
-    }
-  }
 
   const handleDownloadAllPhotos = async () => {
     if (!detailProduct.product_photos || detailProduct.product_photos.length === 0) {
@@ -759,14 +1675,27 @@ export default function Products() {
     setFormData({
       model_id: '',
       material_id: '',
+      spool_id: '',
       sale_price: '',
-      quantity: 1,
     })
+    setAvailableSpools([])
     setMultimaterialMapping({
       color1: '',
       color2: '',
       color3: '',
       color4: '',
+    })
+    setMultimaterialSpools({
+      color1: '',
+      color2: '',
+      color3: '',
+      color4: '',
+    })
+    setMultimaterialAvailableSpools({
+      color1: [],
+      color2: [],
+      color3: [],
+      color4: [],
     })
     setShowModelDropdown(false)
     setShowMaterialDropdown(false)
@@ -796,10 +1725,6 @@ export default function Products() {
     <div className="products-page">
       <div className="page-header">
         <h1>Gestione Prodotti</h1>
-        <button className="btn-primary" onClick={() => { resetForm(); setShowModal(true) }}>
-          <FontAwesomeIcon icon={faPlus} style={{ marginRight: '8px' }} />
-          Nuovo Prodotto
-        </button>
       </div>
 
       {/* Barra di ricerca e ordinamento */}
@@ -833,6 +1758,75 @@ export default function Products() {
               {searchQuery && ` per "${searchQuery}"`}
             </small>
           </div>
+          <div className="form-group" style={{ marginBottom: 0, flex: '0 0 250px', display: 'flex', flexDirection: 'column' }}>
+            <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
+              Stato
+            </label>
+            <div style={{
+              display: 'flex',
+              gap: '4px',
+              background: '#f0f0f0',
+              borderRadius: '6px',
+              padding: '4px',
+              border: '2px solid #e0e0e0',
+              marginTop: 'auto'
+            }}>
+              <button
+                type="button"
+                onClick={() => setStatusFilter('tutti')}
+                style={{
+                  flex: 1,
+                  padding: '8px 12px',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  background: statusFilter === 'tutti' ? '#1a1a1a' : 'transparent',
+                  color: statusFilter === 'tutti' ? 'white' : '#1a1a1a',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                Tutti
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatusFilter('disponibile')}
+                style={{
+                  flex: 1,
+                  padding: '8px 12px',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  background: statusFilter === 'disponibile' ? '#27ae60' : 'transparent',
+                  color: statusFilter === 'disponibile' ? 'white' : '#1a1a1a',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                Disponibile
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatusFilter('venduto')}
+                style={{
+                  flex: 1,
+                  padding: '8px 12px',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  background: statusFilter === 'venduto' ? '#3498db' : 'transparent',
+                  color: statusFilter === 'venduto' ? 'white' : '#1a1a1a',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                Venduto
+              </button>
+            </div>
+          </div>
           <div className="form-group" style={{ marginBottom: 0, flex: '0 0 300px', display: 'flex', flexDirection: 'column' }}>
             <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
               Ordina per
@@ -855,8 +1849,6 @@ export default function Products() {
               <option value="nome_decrescente">Nome Decrescente</option>
               <option value="materiale_crescente">Materiale Crescente</option>
               <option value="materiale_decrescente">Materiale Decrescente</option>
-              <option value="quantità_crescente">Quantità Crescente</option>
-              <option value="quantità_decrescente">Quantità Decrescente</option>
               <option value="prezzo_crescente">Prezzo Vendita Crescente</option>
               <option value="prezzo_decrescente">Prezzo Vendita Decrescente</option>
               <option value="stato_crescente">Stato Crescente</option>
@@ -873,7 +1865,6 @@ export default function Products() {
               <th>SKU</th>
               <th>Modello</th>
               <th>Materiale</th>
-              <th>Quantità</th>
               <th>Stato</th>
               <th>Costo Produzione</th>
               <th>Prezzo Vendita</th>
@@ -983,59 +1974,6 @@ export default function Products() {
                       </div>
                     </td>
                     <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleQuantityChange(product.id, (product.quantity || 1) - 1)
-                          }}
-                          className="btn-secondary"
-                          style={{ 
-                            width: '28px', 
-                            height: '28px', 
-                            padding: 0,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '12px'
-                          }}
-                          disabled={!product.quantity || product.quantity <= 0}
-                          title="Decrementa quantità"
-                        >
-                          <FontAwesomeIcon icon={faMinus} />
-                        </button>
-                        <span style={{ 
-                          minWidth: '40px', 
-                          textAlign: 'center', 
-                          fontWeight: '600',
-                          fontSize: '16px'
-                        }}>
-                          {product.quantity || 0}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleQuantityChange(product.id, (product.quantity || 0) + 1)
-                          }}
-                          className="btn-primary"
-                          style={{ 
-                            width: '28px', 
-                            height: '28px', 
-                            padding: 0,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '12px'
-                          }}
-                          title="Incrementa quantità"
-                        >
-                          <FontAwesomeIcon icon={faPlus} />
-                        </button>
-                      </div>
-                    </td>
-                    <td>
                       <span className={`status-badge ${statusBadge.class}`}>
                         {statusBadge.label}
                       </span>
@@ -1073,6 +2011,16 @@ export default function Products() {
                             )}
                           </>
                         )}
+                        <button 
+                          className="btn-edit" 
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleEditProduct(product)
+                          }} 
+                          title="Modifica materiale/bobina"
+                        >
+                          <FontAwesomeIcon icon={faEdit} />
+                        </button>
                         <button className="btn-delete" onClick={() => handleDelete(product.id)} title="Elimina">
                           <FontAwesomeIcon icon={faTrash} />
                         </button>
@@ -1086,7 +2034,8 @@ export default function Products() {
         </table>
       </div>
 
-      {showModal && (
+      {/* Modal creazione prodotto spostata in PrintQueue */}
+      {false && showModal && (
         <div className="modal-overlay" onClick={() => { setShowModal(false); resetForm() }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h2>Nuovo Prodotto</h2>
@@ -1393,6 +2342,42 @@ export default function Products() {
                           </span>
                           <span style={{ color: '#6c757d' }}>▼</span>
                         </div>
+                        {multimaterialMapping[key] && (
+                          <div className="form-group" style={{ marginTop: '10px' }}>
+                            <label style={{ fontSize: '13px', fontWeight: '500', marginBottom: '5px', display: 'block' }}>
+                              Bobina per {label}
+                            </label>
+                            {multimaterialAvailableSpools[key]?.length === 0 ? (
+                              <div style={{ padding: '10px', background: '#fff3cd', borderRadius: '4px', color: '#856404', fontSize: '14px' }}>
+                                Nessuna bobina disponibile per questo materiale.
+                              </div>
+                            ) : (
+                              <select
+                                value={multimaterialSpools[key] || ''}
+                                onChange={(e) => setMultimaterialSpools({ ...multimaterialSpools, [key]: e.target.value })}
+                                required
+                                style={{
+                                  width: '100%',
+                                  padding: '10px 12px',
+                                  border: '1px solid #ced4da',
+                                  borderRadius: '4px',
+                                  background: 'white',
+                                  fontSize: '14px'
+                                }}
+                              >
+                                <option value="">Seleziona una bobina...</option>
+                                {multimaterialAvailableSpools[key]?.map((spool) => {
+                                  const pricePerKg = parseFloat(spool.price || 0)
+                                  return (
+                                    <option key={spool.id} value={spool.id}>
+                                      {spool.purchase_account} - €{pricePerKg.toFixed(2)}/kg - {parseFloat(spool.remaining_grams).toFixed(2)}g residui
+                                    </option>
+                                  )
+                                })}
+                              </select>
+                            )}
+                          </div>
+                        )}
                         {showMaterialDropdown === key && (
                           <div
                             style={{
@@ -1429,7 +2414,13 @@ export default function Products() {
                             </div>
                             <div>
                               {materials
-                                .filter((material) => material.status === 'disponibile')
+                                .filter((material) => {
+                                  // Filtra solo materiali con bobine disponibili (grammi > 0)
+                                  const materialSpools = spools.filter(
+                                    spool => spool.material_id === material.id && parseFloat(spool.remaining_grams) > 0
+                                  )
+                                  return materialSpools.length > 0
+                                })
                                 .filter((material) => {
                                   if (!materialSearch) return true
                                   const search = materialSearch.toLowerCase()
@@ -1445,6 +2436,7 @@ export default function Products() {
                                     key={material.id}
                                     onClick={() => {
                                       setMultimaterialMapping({ ...multimaterialMapping, [key]: material.id })
+                                      setMultimaterialSpools({ ...multimaterialSpools, [key]: '' }) // Reset bobina quando cambia materiale
                                       setShowMaterialDropdown(false)
                                       setMaterialSearch('')
                                     }}
@@ -1488,7 +2480,7 @@ export default function Products() {
                                             }}
                                           />
                                         )}
-                                        {material.color} - €{parseFloat(material.cost_per_kg).toFixed(2)}/kg
+                                        {material.color}{material.cost_per_kg ? ` - €${parseFloat(material.cost_per_kg).toFixed(2)}/kg` : ''}
                                       </div>
                                     </div>
                                   </div>
@@ -1582,7 +2574,13 @@ export default function Products() {
                             </div>
                           ) : (
                             materials
-                              .filter((material) => material.status === 'disponibile')
+                              .filter((material) => {
+                                // Filtra solo materiali con bobine disponibili (grammi > 0)
+                                const materialSpools = spools.filter(
+                                  spool => spool.material_id === material.id && parseFloat(spool.remaining_grams) > 0
+                                )
+                                return materialSpools.length > 0
+                              })
                               .filter((material) => {
                                 if (!materialSearch) return true
                                 const search = materialSearch.toLowerCase()
@@ -1697,7 +2695,7 @@ export default function Products() {
                               {hoveredMaterial.color}
                             </div>
                             <div style={{ fontSize: '12px', color: '#7f8c8d' }}>
-                              €{parseFloat(hoveredMaterial.cost_per_kg).toFixed(2)}/kg
+                              {hoveredMaterial.cost_per_kg ? `€${parseFloat(hoveredMaterial.cost_per_kg).toFixed(2)}/kg` : 'N/A'}
                             </div>
                           </div>
                         )}
@@ -1705,17 +2703,71 @@ export default function Products() {
                     </div>
                   )}
                 </div>
-                {materials.filter((m) => m.status === 'disponibile').length === 0 && (
+                {materials.filter((m) => {
+                  const materialSpools = spools.filter(
+                    spool => spool.material_id === m.id && parseFloat(spool.remaining_grams) > 0
+                  )
+                  return materialSpools.length > 0
+                }).length === 0 && (
                   <small style={{ color: '#e74c3c', display: 'block', marginTop: '8px' }}>
-                    Nessun materiale disponibile. Aggiungi o riattiva un materiale prima di creare un prodotto.
+                    Nessun materiale disponibile. Aggiungi bobine con grammi disponibili nella pagina Materiali.
                   </small>
                 )}
               </div>
               )}
+              {formData.material_id && !selectedModel?.is_multimaterial && (
+                <div className="form-group">
+                  <label>Bobina</label>
+                  {availableSpools.length === 0 ? (
+                    <div style={{ padding: '10px', background: '#fff3cd', borderRadius: '4px', color: '#856404', fontSize: '14px' }}>
+                      Nessuna bobina disponibile per questo materiale. Crea una bobina nella pagina Materiali.
+                    </div>
+                  ) : (
+                    <select
+                      value={formData.spool_id}
+                      onChange={(e) => setFormData({ ...formData, spool_id: e.target.value })}
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        border: '1px solid #ced4da',
+                        borderRadius: '4px',
+                        background: 'white',
+                        fontSize: '14px'
+                      }}
+                    >
+                      <option value="">Seleziona una bobina...</option>
+                      {availableSpools.map((spool) => {
+                        const pricePerKg = parseFloat(spool.price || 0)
+                        return (
+                          <option key={spool.id} value={spool.id}>
+                            {spool.purchase_account} - €{pricePerKg.toFixed(2)}/kg - {parseFloat(spool.remaining_grams).toFixed(2)}g residui
+                          </option>
+                        )
+                      })}
+                    </select>
+                  )}
+                  {formData.spool_id && selectedModel && (
+                    <small style={{ display: 'block', marginTop: '5px', color: '#666' }}>
+                      Peso prodotto: {(parseFloat(selectedModel.weight_kg) * 1000).toFixed(2)}g
+                      {(() => {
+                        const selectedSpool = availableSpools.find(s => s.id === formData.spool_id)
+                        if (selectedSpool) {
+                          const weightGrams = parseFloat(selectedModel.weight_kg) * 1000
+                          const remaining = parseFloat(selectedSpool.remaining_grams)
+                          const after = remaining - weightGrams
+                          return ` | Residuo dopo: ${after.toFixed(2)}g`
+                        }
+                        return ''
+                      })()}
+                    </small>
+                  )}
+                </div>
+              )}
               {formData.model_id && (
                 (selectedModel?.is_multimaterial 
                   ? (multimaterialMapping.color1 && multimaterialMapping.color2)
-                  : formData.material_id
+                  : formData.material_id && formData.spool_id
                 ) && (
                 <div className="cost-preview">
                   <div style={{ marginBottom: '15px' }}>
@@ -1745,19 +2797,6 @@ export default function Products() {
                   </div>
                 </div>
               ))}
-              <div className="form-group">
-                <label>Quantità</label>
-                <input
-                  type="number"
-                  step="1"
-                  min="1"
-                  value={formData.quantity}
-                  onChange={(e) => setFormData({ ...formData, quantity: parseInt(e.target.value) || 1 })}
-                  required
-                  placeholder="1"
-                />
-                <small>Numero di pezzi disponibili</small>
-              </div>
               <div className="form-group">
                 <label>Prezzo di Vendita (€)</label>
                 <input
@@ -1874,20 +2913,6 @@ export default function Products() {
                     placeholder="0.00"
                   />
                   <small>Puoi modificare il prezzo originale</small>
-                </div>
-                <div className="form-group">
-                  <label>Quantità Venduta</label>
-                  <input
-                    type="number"
-                    step="1"
-                    min="1"
-                    max={selectedProduct?.quantity || 1}
-                    value={saleFormData.quantity_sold}
-                    onChange={(e) => setSaleFormData({ ...saleFormData, quantity_sold: parseInt(e.target.value) || 1 })}
-                    required
-                    placeholder="1"
-                  />
-                  <small>Quantità disponibile: {selectedProduct?.quantity || 0} pezzi</small>
                 </div>
               </div>
               
@@ -2035,6 +3060,491 @@ export default function Products() {
         </div>
       )}
 
+      {showEditModal && editingProduct && (() => {
+        const productModel = models.find(m => m.id === editingProduct.model_id)
+        const isMultimaterial = productModel?.is_multimaterial
+        const isSold = editingProduct.status === 'venduto'
+        
+        return (
+        <div className="modal-overlay" onClick={() => { 
+          setShowEditModal(false); 
+          setEditingProduct(null); 
+          setEditFormData({ material_id: '', spool_id: '' })
+          setMultimaterialMapping({ color1: '', color2: '', color3: '', color4: '' })
+          setMultimaterialSpools({ color1: '', color2: '', color3: '', color4: '' })
+          setShowMaterialDropdown(false)
+          setMaterialSearch('')
+          setMultimaterialMapping({ color1: '', color2: '', color3: '', color4: '' })
+          setMultimaterialSpools({ color1: '', color2: '', color3: '', color4: '' })
+        }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <h2>Modifica Materiale/Bobina</h2>
+            {isSold && (
+              <div style={{ 
+                padding: '12px', 
+                background: '#fff3cd', 
+                borderRadius: '4px', 
+                color: '#856404', 
+                fontSize: '14px',
+                marginBottom: '20px',
+                border: '1px solid #ffc107'
+              }}>
+                <strong>Nota:</strong> Questo prodotto è già stato venduto. La modifica aggiornerà solo i costi di produzione e la vendita associata, ma <strong>non scalerà/ripristinerà grammi dalle bobine</strong>.
+              </div>
+            )}
+            <form onSubmit={handleUpdateProduct}>
+              <div className="form-group">
+                <label>Prodotto</label>
+                <div style={{ padding: '10px', background: '#f8f9fa', borderRadius: '4px', fontSize: '14px' }}>
+                  <strong>{editingProduct.sku}</strong> - {editingProduct.models?.name || 'N/A'}
+                  {isMultimaterial && <span style={{ marginLeft: '10px', color: '#7f8c8d', fontSize: '12px' }}>(Multimateriale)</span>}
+                </div>
+              </div>
+
+              {!isMultimaterial && (
+                <div className="form-group" style={{ position: 'relative' }}>
+                  <label>Materiale</label>
+                  <div style={{ position: 'relative' }}>
+                    <div
+                      onClick={() => {
+                        setShowMaterialDropdown(showMaterialDropdown === 'edit' ? false : 'edit')
+                        setShowModelDropdown(false)
+                        if (showMaterialDropdown !== 'edit') {
+                          setMaterialSearch('')
+                        }
+                      }}
+                      style={{
+                        padding: '10px 12px',
+                        border: '1px solid #ced4da',
+                        borderRadius: '4px',
+                        background: 'white',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <span style={{ color: editFormData.material_id ? '#1a1a1a' : '#6c757d' }}>
+                        {editFormData.material_id
+                          ? (() => {
+                              const material = materials.find((m) => m.id === editFormData.material_id)
+                              return material
+                                ? `${material.brand} - ${material.material_type} - ${material.color}`
+                                : 'Seleziona materiale...'
+                            })()
+                          : 'Seleziona materiale...'}
+                      </span>
+                      <span style={{ color: '#6c757d' }}>▼</span>
+                    </div>
+                    {showMaterialDropdown === 'edit' && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          right: 0,
+                          zIndex: 1000,
+                          marginTop: '4px',
+                          background: 'white',
+                          border: '1px solid #ddd',
+                          borderRadius: '8px',
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                          maxHeight: '400px',
+                          display: 'flex',
+                          flexDirection: 'column'
+                        }}
+                      >
+                        <div style={{ padding: '10px', borderBottom: '1px solid #f0f0f0' }}>
+                          <input
+                            type="text"
+                            placeholder="Cerca materiale..."
+                            value={materialSearch}
+                            onChange={(e) => {
+                              setMaterialSearch(e.target.value)
+                              setHoveredMaterial(null)
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                              width: '100%',
+                              padding: '8px 12px',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              fontSize: '14px'
+                            }}
+                            autoFocus
+                          />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', maxHeight: '300px' }}>
+                          {materials
+                            .filter((material) => {
+                              // Per prodotti venduti, mostra tutti i materiali con bobine (anche con 0g)
+                              // Per prodotti non venduti, mostra solo materiali con bobine disponibili
+                              const materialSpools = isSold 
+                                ? spools.filter(spool => spool.material_id === material.id)
+                                : spools.filter(spool => spool.material_id === material.id && parseFloat(spool.remaining_grams) > 0)
+                              return materialSpools.length > 0
+                            })
+                            .filter((material) => {
+                              if (!materialSearch) return true
+                              const search = materialSearch.toLowerCase()
+                              return (
+                                material.brand.toLowerCase().includes(search) ||
+                                material.material_type.toLowerCase().includes(search) ||
+                                material.color.toLowerCase().includes(search) ||
+                                material.code?.toLowerCase().includes(search)
+                              )
+                            })
+                            .map((material) => (
+                              <div
+                                key={material.id}
+                                onClick={() => {
+                                  setEditFormData({ ...editFormData, material_id: material.id, spool_id: '' })
+                                  setShowMaterialDropdown(false)
+                                  setMaterialSearch('')
+                                }}
+                                style={{
+                                  padding: '10px 12px',
+                                  cursor: 'pointer',
+                                  background: editFormData.material_id === material.id ? '#e8f4f8' : 'white',
+                                  borderBottom: '1px solid #f0f0f0',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '10px'
+                                }}
+                              >
+                                {material.bobina_photo_url && (
+                                  <img
+                                    src={material.bobina_photo_url}
+                                    alt={material.brand}
+                                    style={{
+                                      width: '40px',
+                                      height: '40px',
+                                      objectFit: 'cover',
+                                      borderRadius: '4px',
+                                      flexShrink: 0
+                                    }}
+                                  />
+                                )}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontWeight: '600', color: '#1a1a1a' }}>{material.brand}</div>
+                                  <div style={{ fontSize: '12px', color: '#7f8c8d', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    {material.material_type} -{' '}
+                                    {material.color_hex && (
+                                      <span
+                                        style={{
+                                          display: 'inline-block',
+                                          width: '12px',
+                                          height: '12px',
+                                          borderRadius: '50%',
+                                          backgroundColor: material.color_hex,
+                                          border: '1px solid #ddd',
+                                          flexShrink: 0
+                                        }}
+                                      />
+                                    )}
+                                    {material.color}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {isMultimaterial ? (
+                <div className="form-group">
+                  <label>Materiali per Colore</label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                    {[
+                      { key: 'color1', label: 'Colore 1', required: true },
+                      { key: 'color2', label: 'Colore 2', required: true },
+                      ...(productModel?.color3_weight_g ? [{ key: 'color3', label: 'Colore 3', required: false }] : []),
+                      ...(productModel?.color4_weight_g ? [{ key: 'color4', label: 'Colore 4', required: false }] : []),
+                    ].filter(({ key }) => productModel?.[`${key}_weight_g`]).map(({ key, label, required }) => (
+                      <div key={key} style={{ position: 'relative' }}>
+                        <label style={{ fontSize: '13px', fontWeight: '600', marginBottom: '5px', display: 'block' }}>
+                          {label} {required && <span style={{ color: '#e74c3c' }}>*</span>}
+                        </label>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                          <div style={{ flex: 1, position: 'relative' }}>
+                            <div
+                              onClick={() => {
+                                setShowMaterialDropdown(showMaterialDropdown === `edit_${key}` ? false : `edit_${key}`)
+                                setShowModelDropdown(false)
+                                if (showMaterialDropdown !== `edit_${key}`) {
+                                  setMaterialSearch('')
+                                }
+                              }}
+                              style={{
+                                padding: '10px 12px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                background: 'white',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center'
+                              }}
+                            >
+                              <span style={{ color: multimaterialMapping[key] ? '#1a1a1a' : '#6c757d', fontSize: '14px' }}>
+                                {multimaterialMapping[key]
+                                  ? (() => {
+                                      const material = materials.find((m) => m.id === multimaterialMapping[key])
+                                      return material
+                                        ? `${material.brand} - ${material.material_type} - ${material.color}`
+                                        : 'Seleziona materiale...'
+                                    })()
+                                  : 'Seleziona materiale...'}
+                              </span>
+                              <span style={{ color: '#6c757d' }}>▼</span>
+                            </div>
+                            {multimaterialMapping[key] && (
+                              <div className="form-group" style={{ marginTop: '10px' }}>
+                                <label style={{ fontSize: '13px', fontWeight: '500', marginBottom: '5px', display: 'block' }}>
+                                  Bobina per {label}
+                                </label>
+                                {(() => {
+                                  const weightGrams = parseFloat(productModel?.[`${key}_weight_g`] || 0)
+                                  // Per prodotti venduti, mostra tutte le bobine del materiale (non scaliamo grammi)
+                                  // Per prodotti non venduti, filtra solo quelle con grammi sufficienti
+                                  const availableSpoolsForColor = isSold
+                                    ? spools.filter(spool => spool.material_id === multimaterialMapping[key])
+                                    : spools.filter(
+                                        spool => spool.material_id === multimaterialMapping[key] &&
+                                                 parseFloat(spool.remaining_grams) >= weightGrams
+                                      )
+                                  
+                                  return availableSpoolsForColor.length === 0 ? (
+                                    <div style={{ padding: '10px', background: '#fff3cd', borderRadius: '4px', color: '#856404', fontSize: '14px' }}>
+                                      {isSold 
+                                        ? 'Nessuna bobina trovata per questo materiale.'
+                                        : 'Nessuna bobina disponibile per questo materiale.'}
+                                    </div>
+                                  ) : (
+                                    <select
+                                      value={multimaterialSpools[key] || ''}
+                                      onChange={(e) => setMultimaterialSpools({ ...multimaterialSpools, [key]: e.target.value })}
+                                      required={required}
+                                      style={{
+                                        width: '100%',
+                                        padding: '10px 12px',
+                                        border: '1px solid #ced4da',
+                                        borderRadius: '4px',
+                                        background: 'white',
+                                        fontSize: '14px'
+                                      }}
+                                    >
+                                      <option value="">Seleziona una bobina...</option>
+                                      {availableSpoolsForColor.map((spool) => {
+                                        const pricePerKg = parseFloat(spool.price || 0)
+                                        return (
+                                          <option key={spool.id} value={spool.id}>
+                                            {spool.purchase_account} - €{pricePerKg.toFixed(2)}/kg{!isSold ? ` - ${parseFloat(spool.remaining_grams).toFixed(2)}g residui` : ''}
+                                          </option>
+                                        )
+                                      })}
+                                    </select>
+                                  )
+                                })()}
+                              </div>
+                            )}
+                            {showMaterialDropdown === `edit_${key}` && (
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  top: '100%',
+                                  left: 0,
+                                  right: 0,
+                                  zIndex: 1000,
+                                  marginTop: '4px',
+                                  background: 'white',
+                                  border: '1px solid #ddd',
+                                  borderRadius: '8px',
+                                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                  maxHeight: '300px',
+                                  overflowY: 'auto'
+                                }}
+                              >
+                                <div style={{ padding: '10px', borderBottom: '1px solid #f0f0f0' }}>
+                                  <input
+                                    type="text"
+                                    placeholder="Cerca materiale..."
+                                    value={materialSearch}
+                                    onChange={(e) => {
+                                      setMaterialSearch(e.target.value)
+                                      setHoveredMaterial(null)
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    style={{
+                                      width: '100%',
+                                      padding: '8px 12px',
+                                      border: '1px solid #ddd',
+                                      borderRadius: '4px',
+                                      fontSize: '14px'
+                                    }}
+                                    autoFocus
+                                  />
+                                </div>
+                                <div>
+                                  {materials
+                                    .filter((material) => {
+                                      const materialSpools = isSold
+                                        ? spools.filter(spool => spool.material_id === material.id)
+                                        : spools.filter(spool => spool.material_id === material.id && parseFloat(spool.remaining_grams) > 0)
+                                      return materialSpools.length > 0
+                                    })
+                                    .filter((material) => {
+                                      if (!materialSearch) return true
+                                      const search = materialSearch.toLowerCase()
+                                      return (
+                                        material.brand.toLowerCase().includes(search) ||
+                                        material.material_type.toLowerCase().includes(search) ||
+                                        material.color.toLowerCase().includes(search) ||
+                                        material.code?.toLowerCase().includes(search)
+                                      )
+                                    })
+                                    .map((material) => (
+                                      <div
+                                        key={material.id}
+                                        onClick={() => {
+                                          setMultimaterialMapping({ ...multimaterialMapping, [key]: material.id })
+                                          setMultimaterialSpools({ ...multimaterialSpools, [key]: '' })
+                                          setShowMaterialDropdown(false)
+                                          setMaterialSearch('')
+                                        }}
+                                        style={{
+                                          padding: '10px 12px',
+                                          cursor: 'pointer',
+                                          background: multimaterialMapping[key] === material.id ? '#e8f4f8' : 'white',
+                                          borderBottom: '1px solid #f0f0f0',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '10px'
+                                        }}
+                                      >
+                                        {material.bobina_photo_url && (
+                                          <img
+                                            src={material.bobina_photo_url}
+                                            alt={material.brand}
+                                            style={{
+                                              width: '30px',
+                                              height: '30px',
+                                              objectFit: 'cover',
+                                              borderRadius: '4px',
+                                              flexShrink: 0
+                                            }}
+                                          />
+                                        )}
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                          <div style={{ fontWeight: '600', color: '#1a1a1a', fontSize: '14px' }}>{material.brand}</div>
+                                          <div style={{ fontSize: '12px', color: '#7f8c8d', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            {material.material_type} -{' '}
+                                            {material.color_hex && (
+                                              <span
+                                                style={{
+                                                  display: 'inline-block',
+                                                  width: '10px',
+                                                  height: '10px',
+                                                  borderRadius: '50%',
+                                                  backgroundColor: material.color_hex,
+                                                  border: '1px solid #ddd',
+                                                  flexShrink: 0
+                                                }}
+                                              />
+                                            )}
+                                            {material.color}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <small>Seleziona un materiale e una bobina per ogni colore utilizzato nel modello</small>
+                </div>
+              ) : (
+                <>
+                  {editFormData.material_id && (
+                    <div className="form-group">
+                      <label>Bobina</label>
+                      {editAvailableSpools.length === 0 ? (
+                        <div style={{ padding: '10px', background: '#fff3cd', borderRadius: '4px', color: '#856404', fontSize: '14px' }}>
+                          {isSold 
+                            ? 'Nessuna bobina trovata per questo materiale.'
+                            : 'Nessuna bobina disponibile per questo materiale.'}
+                        </div>
+                      ) : (
+                        <select
+                          value={editFormData.spool_id}
+                          onChange={(e) => setEditFormData({ ...editFormData, spool_id: e.target.value })}
+                          required
+                          style={{
+                            width: '100%',
+                            padding: '10px 12px',
+                            border: '1px solid #ced4da',
+                            borderRadius: '4px',
+                            background: 'white',
+                            fontSize: '14px'
+                          }}
+                        >
+                          <option value="">Seleziona una bobina...</option>
+                          {editAvailableSpools.map((spool) => {
+                            const pricePerKg = parseFloat(spool.price || 0)
+                            return (
+                              <option key={spool.id} value={spool.id}>
+                                {spool.purchase_account} - €{pricePerKg.toFixed(2)}/kg - {parseFloat(spool.remaining_grams).toFixed(2)}g residui
+                              </option>
+                            )
+                          })}
+                        </select>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div className="modal-actions">
+                <button 
+                  type="button" 
+                  className="btn-secondary" 
+                  onClick={() => { 
+                    setShowEditModal(false)
+                    setEditingProduct(null)
+                    setEditFormData({ material_id: '', spool_id: '' })
+                    setMultimaterialMapping({ color1: '', color2: '', color3: '', color4: '' })
+                    setMultimaterialSpools({ color1: '', color2: '', color3: '', color4: '' })
+                    setShowMaterialDropdown(false)
+                    setMaterialSearch('')
+                  }}
+                >
+                  Annulla
+                </button>
+                <button 
+                  type="submit" 
+                  className="btn-primary"
+                  disabled={
+                    isMultimaterial
+                      ? !multimaterialMapping.color1 || !multimaterialMapping.color2 || !multimaterialSpools.color1 || !multimaterialSpools.color2
+                      : !editFormData.material_id || !editFormData.spool_id
+                  }
+                >
+                  Salva Modifiche
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+        )
+      })()}
+
       {showDetailModal && detailProduct && (
         <div className="modal-overlay" onClick={() => { setShowDetailModal(false); setDetailProduct(null) }}>
           <div className="modal-content product-detail-modal" onClick={(e) => e.stopPropagation()}>
@@ -2043,9 +3553,6 @@ export default function Products() {
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '5px' }}>
                 <div className="detail-item highlight" style={{ padding: '8px 12px', fontSize: '14px' }}>
                   <strong>SKU:</strong> {detailProduct.sku || 'N/A'}
-                </div>
-                <div className="detail-item" style={{ fontSize: '14px' }}>
-                  <strong>Quantità:</strong> {detailProduct.quantity || 0}
                 </div>
               </div>
             </div>

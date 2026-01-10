@@ -9,13 +9,19 @@ import './Materials.css'
 export default function Materials() {
   const [materials, setMaterials] = useState([])
   const [filteredMaterials, setFilteredMaterials] = useState([])
+  const [spools, setSpools] = useState([]) // Bobine per ogni materiale
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [showSpoolModal, setShowSpoolModal] = useState(false)
+  const [showSpoolsModal, setShowSpoolsModal] = useState(false) // Modale per visualizzare le bobine di un materiale
+  const [selectedMaterialForSpools, setSelectedMaterialForSpools] = useState(null) // Materiale selezionato per vedere le bobine
+  const [editingSpool, setEditingSpool] = useState(null)
+  const [selectedMaterialForSpool, setSelectedMaterialForSpool] = useState(null)
   const [filters, setFilters] = useState({
     brand: '',
     color: '',
     material_type: '',
-    availability: '',
+    availability: 'tutti', // 'tutti', 'disponibile', 'esaurito'
     sortBy: 'data_decrescente'
   })
   const [showColorPicker, setShowColorPicker] = useState(false)
@@ -25,6 +31,13 @@ export default function Materials() {
   const [bobinaPreview, setBobinaPreview] = useState(null)
   const [printPreview, setPrintPreview] = useState(null)
   const [uploading, setUploading] = useState(false)
+  const [spoolFormData, setSpoolFormData] = useState({
+    purchase_account: 'Fabio',
+    purchased_from: '',
+    remaining_grams: 1000,
+    price: '',
+    quantity: 1
+  })
   const [formData, setFormData] = useState({
     brand: '',
     purchased_from: '',
@@ -37,6 +50,14 @@ export default function Materials() {
     bobina_photo_url: '',
     print_example_photo_url: '',
   })
+
+  // Helper per determinare se un materiale è disponibile o esaurito
+  const isMaterialAvailable = (materialId) => {
+    const materialSpools = getSpoolsForMaterial(materialId)
+    if (materialSpools.length === 0) return false
+    const totalGrams = materialSpools.reduce((sum, spool) => sum + parseFloat(spool.remaining_grams || 0), 0)
+    return totalGrams > 0
+  }
 
   const applyFilters = (materialsList, filterValues) => {
     let filtered = [...materialsList]
@@ -61,10 +82,10 @@ export default function Materials() {
     }
 
     // Filtro Disponibilità
-    if (filterValues.availability === 'si') {
-      filtered = filtered.filter(m => m.status === 'disponibile')
-    } else if (filterValues.availability === 'no') {
-      filtered = filtered.filter(m => m.status === 'esaurito')
+    if (filterValues.availability === 'disponibile') {
+      filtered = filtered.filter(m => isMaterialAvailable(m.id))
+    } else if (filterValues.availability === 'esaurito') {
+      filtered = filtered.filter(m => !isMaterialAvailable(m.id))
     }
 
     // Ordinamento
@@ -73,11 +94,6 @@ export default function Materials() {
         return parseFloat(a.cost_per_kg || 0) - parseFloat(b.cost_per_kg || 0)
       } else if (filterValues.sortBy === 'prezzo_decrescente') {
         return parseFloat(b.cost_per_kg || 0) - parseFloat(a.cost_per_kg || 0)
-      } else if (filterValues.sortBy === 'disponibilità') {
-        // Prima disponibili, poi esauriti
-        if (a.status === 'disponibile' && b.status !== 'disponibile') return -1
-        if (a.status !== 'disponibile' && b.status === 'disponibile') return 1
-        return 0
       } else if (filterValues.sortBy === 'data_decrescente') {
         // Ordina per data di caricamento decrescente (più recenti prima)
         const dateA = new Date(a.created_at || 0)
@@ -106,8 +122,35 @@ export default function Materials() {
     setLoading(false)
   }
 
+  const loadSpools = async () => {
+    const { data, error } = await supabase
+      .from('spools')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error loading spools:', error)
+    } else {
+      setSpools(data || [])
+    }
+  }
+
+  const getSpoolsForMaterial = (materialId) => {
+    return spools.filter(spool => spool.material_id === materialId)
+  }
+
+  const getAveragePriceForMaterial = (materialId) => {
+    const materialSpools = getSpoolsForMaterial(materialId)
+    if (materialSpools.length === 0) {
+      return null
+    }
+    const totalPrice = materialSpools.reduce((sum, spool) => sum + parseFloat(spool.price || 0), 0)
+    return totalPrice / materialSpools.length
+  }
+
   useEffect(() => {
     loadMaterials()
+    loadSpools()
   }, [])
 
   useEffect(() => {
@@ -121,7 +164,10 @@ export default function Materials() {
     setUploading(true)
 
     try {
-      const cost = parseFloat(formData.cost_per_kg)
+      // cost_per_kg è ora opzionale (il costo viene dalle bobine)
+      const cost = formData.cost_per_kg && formData.cost_per_kg.trim() !== '' 
+        ? parseFloat(formData.cost_per_kg) 
+        : null
       let bobinaPhotoUrl = formData.bobina_photo_url
       let printPhotoUrl = formData.print_example_photo_url
 
@@ -188,13 +234,15 @@ export default function Materials() {
 
       const materialData = {
         brand: formData.brand,
-        purchased_from: formData.purchased_from,
         color: formData.color,
         color_hex: colorHex || null,
         material_type: formData.material_type,
         code: code,
         cost_per_kg: cost,
-        status: formData.status,
+        purchased_from: formData.purchased_from && formData.purchased_from.trim() !== '' 
+          ? formData.purchased_from.trim() 
+          : null,
+        status: 'disponibile', // Manteniamo sempre disponibile per retrocompatibilità
         bobina_photo_url: bobinaPhotoUrl,
         print_example_photo_url: printPhotoUrl || null,
       }
@@ -252,13 +300,11 @@ export default function Materials() {
     setEditingMaterial(material)
     setFormData({
       brand: material.brand || '',
-      purchased_from: material.purchased_from || '',
       color: material.color || '',
       color_hex: material.color_hex || '',
       material_type: material.material_type || 'PLA',
       code: material.code || '',
       cost_per_kg: material.cost_per_kg,
-      status: material.status || 'disponibile',
       bobina_photo_url: material.bobina_photo_url || '',
       print_example_photo_url: material.print_example_photo_url || '',
     })
@@ -267,21 +313,6 @@ export default function Materials() {
     setBobinaPreview(material.bobina_photo_url || null)
     setPrintPreview(material.print_example_photo_url || null)
     setShowModal(true)
-  }
-
-  const handleToggleStatus = async (id, currentStatus) => {
-    const newStatus = currentStatus === 'disponibile' ? 'esaurito' : 'disponibile'
-    
-    const { error } = await supabase
-      .from('materials')
-      .update({ status: newStatus })
-      .eq('id', id)
-
-    if (error) {
-      alert('Errore durante l\'aggiornamento dello stato: ' + error.message)
-    } else {
-      await loadMaterials()
-    }
   }
 
   const handleDelete = async (id) => {
@@ -376,6 +407,150 @@ export default function Materials() {
     }
   }
 
+  const handleMaterialClick = (material) => {
+    setSelectedMaterialForSpools(material)
+    setShowSpoolsModal(true)
+  }
+
+  const handleCreateSpool = async (e) => {
+    e.preventDefault()
+    
+    if (!selectedMaterialForSpool) {
+      alert('Seleziona un materiale dalla tabella cliccando "Aggiungi bobina" sulla riga del materiale desiderato')
+      return
+    }
+
+    const price = parseFloat(spoolFormData.price)
+    if (!price || price <= 0) {
+      alert('Inserisci un prezzo valido per la bobina')
+      return
+    }
+
+    const quantity = parseInt(spoolFormData.quantity) || 1
+    if (quantity < 1) {
+      alert('La quantità deve essere almeno 1')
+      return
+    }
+
+    if (editingSpool) {
+      // Modifica bobina esistente (solo una alla volta)
+      const spoolData = {
+        purchase_account: spoolFormData.purchase_account,
+        purchased_from: spoolFormData.purchased_from,
+        remaining_grams: parseFloat(spoolFormData.remaining_grams) || 1000,
+        price: price
+      }
+
+      const { error } = await supabase
+        .from('spools')
+        .update(spoolData)
+        .eq('id', editingSpool.id)
+
+      if (error) {
+        alert('Errore durante l\'aggiornamento: ' + error.message)
+      } else {
+        await loadSpools()
+        setShowSpoolModal(false)
+        resetSpoolForm()
+        // Se il modale delle bobine era aperto, riaprirlo per mostrare le modifiche
+        if (selectedMaterialForSpool) {
+          setSelectedMaterialForSpools(selectedMaterialForSpool)
+          setShowSpoolsModal(true)
+        }
+      }
+    } else {
+      // Crea nuove bobine (può essere più di una)
+      const spoolsToInsert = []
+      for (let i = 0; i < quantity; i++) {
+        spoolsToInsert.push({
+          material_id: selectedMaterialForSpool.id,
+          purchase_account: spoolFormData.purchase_account,
+          purchased_from: spoolFormData.purchased_from,
+          remaining_grams: parseFloat(spoolFormData.remaining_grams) || 1000,
+          price: price
+        })
+      }
+
+      const { error } = await supabase.from('spools').insert(spoolsToInsert)
+
+      if (error) {
+        alert('Errore durante l\'inserimento: ' + error.message)
+      } else {
+        await loadSpools()
+        setShowSpoolModal(false)
+        resetSpoolForm()
+        // Se il modale delle bobine era aperto, riaprirlo per mostrare le nuove bobine
+        if (selectedMaterialForSpool) {
+          setSelectedMaterialForSpools(selectedMaterialForSpool)
+          setShowSpoolsModal(true)
+        }
+      }
+    }
+  }
+
+  const handleEditSpool = (spool) => {
+    setEditingSpool(spool)
+    const material = materials.find(m => m.id === spool.material_id)
+    setSelectedMaterialForSpool(material)
+    setSpoolFormData({
+      purchase_account: spool.purchase_account,
+      purchased_from: spool.purchased_from || '',
+      remaining_grams: spool.remaining_grams,
+      price: spool.price || '',
+      quantity: 1
+    })
+    setShowSpoolModal(true)
+  }
+
+  const handleDeleteSpool = async (spoolId) => {
+    if (!confirm('Sei sicuro di voler eliminare questa bobina?')) return
+
+    // Controlla se ci sono prodotti associati a questa bobina
+    const { data: products, error } = await supabase
+      .from('products')
+      .select('id')
+      .eq('spool_id', spoolId)
+      .limit(1)
+
+    if (error) {
+      alert('Errore durante il controllo dei prodotti associati: ' + error.message)
+      return
+    }
+
+    if (products && products.length > 0) {
+      const { count } = await supabase
+        .from('products')
+        .select('*', { count: 'exact', head: true })
+        .eq('spool_id', spoolId)
+      alert(`Impossibile eliminare la bobina: ci sono ${count} prodotto/i associato/i.`)
+      return
+    }
+
+    const { error: deleteError } = await supabase.from('spools').delete().eq('id', spoolId)
+
+    if (deleteError) {
+      alert('Errore durante l\'eliminazione: ' + deleteError.message)
+    } else {
+      await loadSpools()
+      // Se il modale delle bobine è aperto, aggiorna il materiale selezionato per aggiornare la visualizzazione
+      if (showSpoolsModal && selectedMaterialForSpools) {
+        // Il modale si aggiornerà automaticamente quando loadSpools aggiorna lo stato spools
+      }
+    }
+  }
+
+  const resetSpoolForm = () => {
+    setSpoolFormData({
+      purchase_account: 'Fabio',
+      purchased_from: '',
+      remaining_grams: 1000,
+      price: '',
+      quantity: 1
+    })
+    setEditingSpool(null)
+    setSelectedMaterialForSpool(null)
+  }
+
   const handleBobinaFileChange = (e) => {
     const file = e.target.files[0]
     if (!file) {
@@ -440,16 +615,38 @@ export default function Materials() {
     if (fileInput) fileInput.value = ''
   }
 
+  // Calcola il prossimo codice materiale disponibile
+  const calculateNextCode = () => {
+    if (materials.length === 0) {
+      return '0001'
+    }
+    
+    // Estrae tutti i codici numerici e trova il massimo
+    const codes = materials
+      .map(m => m.code)
+      .filter(code => code && /^\d{4}$/.test(code))
+      .map(code => parseInt(code, 10))
+    
+    if (codes.length === 0) {
+      return '0001'
+    }
+    
+    const maxCode = Math.max(...codes)
+    const nextCode = maxCode + 1
+    
+    // Formatta come 4 cifre con zeri iniziali
+    return nextCode.toString().padStart(4, '0')
+  }
+
   const resetForm = () => {
+    const nextCode = calculateNextCode()
     setFormData({
       brand: '',
-      purchased_from: '',
       color: '',
       color_hex: '',
       material_type: 'PLA',
-      code: '',
+      code: nextCode,
       cost_per_kg: '',
-      status: 'disponibile',
       bobina_photo_url: '',
       print_example_photo_url: '',
     })
@@ -540,26 +737,76 @@ export default function Materials() {
               <option value="PLA">PLA</option>
               <option value="PETG">PETG</option>
               <option value="ABS">ABS</option>
+              <option value="TPU">TPU</option>
+              <option value="PC">PC</option>
+              <option value="ASA">ASA</option>
             </select>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label style={{ fontSize: '14px', marginBottom: '5px', display: 'block' }}>Disponibilità</label>
-            <select
-              value={filters.availability}
-              onChange={(e) => setFilters({ ...filters, availability: e.target.value })}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                border: '2px solid #e0e0e0',
-                borderRadius: '6px',
-                fontSize: '14px',
-                background: 'white'
-              }}
-            >
-              <option value="">Tutti</option>
-              <option value="si">Sì</option>
-              <option value="no">No</option>
-            </select>
+            <div style={{
+              display: 'flex',
+              gap: '4px',
+              background: '#f0f0f0',
+              borderRadius: '6px',
+              padding: '4px',
+              border: '2px solid #e0e0e0'
+            }}>
+              <button
+                type="button"
+                onClick={() => setFilters({ ...filters, availability: 'tutti' })}
+                style={{
+                  flex: 1,
+                  padding: '8px 12px',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  background: filters.availability === 'tutti' ? '#1a1a1a' : 'transparent',
+                  color: filters.availability === 'tutti' ? 'white' : '#1a1a1a',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                Tutti
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilters({ ...filters, availability: 'disponibile' })}
+                style={{
+                  flex: 1,
+                  padding: '8px 12px',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  background: filters.availability === 'disponibile' ? '#27ae60' : 'transparent',
+                  color: filters.availability === 'disponibile' ? 'white' : '#1a1a1a',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                Disponibile
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilters({ ...filters, availability: 'esaurito' })}
+                style={{
+                  flex: 1,
+                  padding: '8px 12px',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  background: filters.availability === 'esaurito' ? '#e74c3c' : 'transparent',
+                  color: filters.availability === 'esaurito' ? 'white' : '#1a1a1a',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                Esaurito
+              </button>
+            </div>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label style={{ fontSize: '14px', marginBottom: '5px', display: 'block' }}>Ordina per</label>
@@ -578,7 +825,6 @@ export default function Materials() {
               <option value="brand">Brand</option>
               <option value="prezzo_crescente">Prezzo Crescente</option>
               <option value="prezzo_decrescente">Prezzo Decrescente</option>
-              <option value="disponibilità">Disponibilità (Prima disponibili)</option>
               <option value="data_decrescente">Data Caricamento (Più recenti)</option>
             </select>
           </div>
@@ -590,117 +836,232 @@ export default function Materials() {
           <thead>
             <tr>
               <th>Brand</th>
-              <th>Materiale</th>
-              <th>Colore</th>
-              <th>Acquistato da</th>
-              <th>Costo al Kg (€)</th>
-              <th>Stato</th>
+              <th style={{ textAlign: 'center' }}>Materiale</th>
+              <th style={{ textAlign: 'center' }}>Colore</th>
+              <th style={{ textAlign: 'center' }}>Grammi Disponibili</th>
+              <th style={{ textAlign: 'center' }}>Costo Medio (€/Kg)</th>
               <th>Azioni</th>
             </tr>
           </thead>
           <tbody>
             {filteredMaterials.length === 0 ? (
               <tr>
-                <td colSpan="7" className="empty-state">
+                <td colSpan="6" className="empty-state">
                   {materials.length === 0 
                     ? 'Nessun materiale trovato. Crea il primo materiale!'
                     : 'Nessun materiale corrisponde ai filtri selezionati.'}
                 </td>
               </tr>
             ) : (
-              filteredMaterials.map((material) => (
-                <tr key={material.id}>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      {material.bobina_photo_url && (
-                        <img
-                          src={material.bobina_photo_url}
-                          alt={material.brand}
-                          style={{
-                            width: '40px',
-                            height: '40px',
-                            objectFit: 'cover',
-                            borderRadius: '4px',
-                            border: '1px solid #e0e0e0'
-                          }}
-                        />
-                      )}
-                      <div>
-                        <div><strong>{material.brand}</strong></div>
-                        {material.code && (
-                          <small style={{ color: '#7f8c8d', fontSize: '12px' }}>Codice: {material.code}</small>
-                        )}
-                      </div>
-                    </div>
-                  </td>
-                  <td>
-                    <span style={{ 
-                      padding: '4px 8px', 
-                      borderRadius: '4px', 
-                      background: '#e8f4f8', 
-                      color: '#1a1a1a',
-                      fontSize: '12px',
-                      fontWeight: '600'
-                    }}>
-                      {material.material_type}
-                    </span>
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      {material.color_hex && (
-                        <div
-                          style={{
-                            width: '20px',
-                            height: '20px',
-                            borderRadius: '50%',
-                            backgroundColor: material.color_hex,
-                            border: '1px solid #ddd',
-                            flexShrink: 0
-                          }}
-                          title={material.color_hex}
-                        />
-                      )}
+              filteredMaterials.map((material) => {
+                const materialSpools = getSpoolsForMaterial(material.id)
+                
+                // Separa bobine complete (>= 1000g) da bobine parziali (< 1000g)
+                const fullSpools = materialSpools.filter(spool => parseFloat(spool.remaining_grams || 0) >= 1000)
+                const partialSpools = materialSpools.filter(spool => parseFloat(spool.remaining_grams || 0) < 1000)
+                
+                // Conta le bobine complete
+                const fullSpoolsCount = fullSpools.length
+                
+                // La barra mostra i grammi della prima bobina parziale (se esiste), altrimenti 1000g
+                let progressBarValue
+                let additionalKgs = 0
+                
+                if (partialSpools.length > 0) {
+                  // Prendi la prima bobina parziale per la barra
+                  progressBarValue = parseFloat(partialSpools[0].remaining_grams || 0)
+                  // Tutte le bobine complete vanno nel contatore "+Xkg"
+                  additionalKgs = fullSpoolsCount
+                } else if (fullSpools.length > 0) {
+                  // Se non ci sono bobine parziali, mostra 1000g (barra piena per una bobina completa)
+                  progressBarValue = 1000
+                  // Le bobine complete oltre la prima (quella mostrata nella barra) vanno nel contatore "+Xkg"
+                  // Se ho 1 bobina completa: additionalKgs = 0 (non mostro "+Xkg")
+                  // Se ho 2+ bobine complete: additionalKgs = fullSpoolsCount - 1
+                  additionalKgs = fullSpoolsCount > 1 ? fullSpoolsCount - 1 : 0
+                } else {
+                  // Nessuna bobina disponibile
+                  progressBarValue = 0
+                  additionalKgs = 0
+                }
+                
+                return (
+                  <tr 
+                    key={material.id}
+                    onClick={() => handleMaterialClick(material)}
+                    style={{ cursor: 'pointer' }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          {material.bobina_photo_url && (
+                            <img
+                              src={material.bobina_photo_url}
+                              alt={material.brand}
+                              style={{
+                                width: '40px',
+                                height: '40px',
+                                objectFit: 'cover',
+                                borderRadius: '4px',
+                                border: '1px solid #e0e0e0'
+                              }}
+                            />
+                          )}
+                          <div>
+                            <div><strong>{material.brand}</strong></div>
+                            {material.code && (
+                              <small style={{ color: '#7f8c8d', fontSize: '12px' }}>Codice: {material.code}</small>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        <span style={{ 
+                          padding: '4px 8px', 
+                          borderRadius: '4px', 
+                          background: '#e8f4f8', 
+                          color: '#1a1a1a',
+                          fontSize: '12px',
+                          fontWeight: '600'
+                        }}>
+                          {material.material_type}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                          {material.color_hex && (
+                            <div
+                              style={{
+                                width: '20px',
+                                height: '20px',
+                                borderRadius: '50%',
+                                backgroundColor: material.color_hex,
+                                border: '1px solid #ddd',
+                                flexShrink: 0
+                              }}
+                              title={material.color_hex}
+                            />
+                          )}
                       <span>{material.color}</span>
                     </div>
                   </td>
-                  <td>{material.purchased_from}</td>
-                  <td>€{parseFloat(material.cost_per_kg).toFixed(2)}</td>
-                  <td>
-                    <div className={`status-badge-with-switch ${material.status === 'disponibile' ? 'status-available' : 'status-sold'}`}>
-                      <label className="status-switch">
-                        <input
-                          type="checkbox"
-                          checked={material.status === 'disponibile'}
-                          onChange={() => handleToggleStatus(material.id, material.status)}
-                          title={material.status === 'disponibile' ? 'Imposta come esaurito' : 'Imposta come disponibile'}
-                        />
-                        <span className="slider"></span>
-                      </label>
-                      <span className="status-text">
-                        {material.status === 'disponibile' ? 'Disponibile' : 'Esaurito'}
-                      </span>
+                  <td style={{ textAlign: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', minWidth: '200px' }}>
+                      <div style={{ flex: 1, position: 'relative' }}>
+                        <div
+                          style={{
+                            width: '100%',
+                            height: '20px',
+                            backgroundColor: '#e0e0e0',
+                            borderRadius: '10px',
+                            overflow: 'hidden',
+                            position: 'relative'
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${(progressBarValue / 1000) * 100}%`,
+                              height: '100%',
+                              backgroundColor: progressBarValue >= 1000 ? '#27ae60' : progressBarValue >= 500 ? '#f39c12' : '#e74c3c',
+                              transition: 'width 0.3s ease',
+                              borderRadius: '10px'
+                            }}
+                          />
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#666', marginTop: '2px', textAlign: 'center' }}>
+                          {progressBarValue >= 1000 ? '1000g' : `${progressBarValue.toFixed(0)}g`}
+                        </div>
+                      </div>
+                      {additionalKgs > 0 && (
+                        <div
+                          style={{
+                            padding: '4px 8px',
+                            backgroundColor: '#27ae60',
+                            color: 'white',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            fontWeight: '600',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          +{additionalKgs}kg
+                        </div>
+                      )}
                     </div>
                   </td>
-                  <td>
-                    <div className="action-buttons">
-                      <button
-                        className="btn-edit"
-                        onClick={() => handleEdit(material)}
-                        title="Modifica"
-                      >
-                        <FontAwesomeIcon icon={faEdit} />
-                      </button>
-                      <button
-                        className="btn-delete"
-                        onClick={() => handleDelete(material.id)}
-                        title="Elimina"
-                      >
-                        <FontAwesomeIcon icon={faTrash} />
-                      </button>
-                    </div>
+                  <td style={{ textAlign: 'center' }}>
+                    {(() => {
+                      const avgPrice = getAveragePriceForMaterial(material.id)
+                      if (avgPrice !== null) {
+                        return (
+                          <div style={{ fontSize: '14px', fontWeight: '600', color: '#2d2d2d' }}>
+                            €{avgPrice.toFixed(2)}
+                          </div>
+                        )
+                      }
+                      return (
+                        <div style={{ fontSize: '14px', color: '#999', fontStyle: 'italic' }}>
+                          N/A
+                        </div>
+                      )
+                    })()}
                   </td>
-                </tr>
-              ))
+                  <td>
+                        <div 
+                          className="action-buttons" 
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ 
+                            display: 'flex', 
+                            gap: '8px', 
+                            alignItems: 'center', 
+                            justifyContent: 'center',
+                            width: '100%'
+                          }}
+                        >
+                          <button
+                            className="btn-edit"
+                            onClick={() => handleEdit(material)}
+                            title="Modifica"
+                          >
+                            <FontAwesomeIcon icon={faEdit} />
+                          </button>
+                          <button
+                            className="btn-delete"
+                            onClick={() => handleDelete(material.id)}
+                            title="Elimina"
+                          >
+                            <FontAwesomeIcon icon={faTrash} />
+                          </button>
+                          <button
+                            className="btn-edit"
+                            onClick={() => {
+                              // Resetta solo i campi del form, non il materiale
+                              setSpoolFormData({
+                                purchase_account: 'Fabio',
+                                purchased_from: '',
+                                remaining_grams: 1000,
+                                price: '',
+                                quantity: 1
+                              })
+                              setEditingSpool(null)
+                              setSelectedMaterialForSpool(material)
+                              setShowSpoolModal(true)
+                            }}
+                            title="Aggiungi bobina"
+                            style={{ 
+                              background: '#3498db'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = '#2980b9'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = '#3498db'}
+                          >
+                            <FontAwesomeIcon icon={faPlus} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                )
+              })
             )}
           </tbody>
         </table>
@@ -732,6 +1093,9 @@ export default function Materials() {
                     <option value="PLA">PLA</option>
                     <option value="PETG">PETG</option>
                     <option value="ABS">ABS</option>
+                    <option value="TPU">TPU</option>
+                    <option value="PC">PC</option>
+                    <option value="ASA">ASA</option>
                   </select>
                 </div>
               </div>
@@ -765,30 +1129,6 @@ export default function Materials() {
                   />
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: '15px' }}>
-                <div className="form-group" style={{ flex: 1 }}>
-                  <label>Acquistato da</label>
-                  <input
-                    type="text"
-                    value={formData.purchased_from}
-                    onChange={(e) => setFormData({ ...formData, purchased_from: e.target.value })}
-                    required
-                    placeholder="Es: Amazon, AliExpress, Negozio locale..."
-                  />
-                </div>
-                <div className="form-group" style={{ flex: 1 }}>
-                  <label>Costo al Kg (€)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.cost_per_kg}
-                    onChange={(e) => setFormData({ ...formData, cost_per_kg: e.target.value })}
-                    required
-                    placeholder="0.00"
-                  />
-                </div>
-              </div>
               <div className="form-group">
                 <label>Codice Materiale (4 cifre)</label>
                 <input
@@ -805,17 +1145,6 @@ export default function Materials() {
                   pattern="[0-9]{4}"
                 />
                 <small>Codice univoco di 4 cifre (es: 0001, 1234)</small>
-              </div>
-              <div className="form-group">
-                <label>Stato</label>
-                <select
-                  value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                  required
-                >
-                  <option value="disponibile">Disponibile</option>
-                  <option value="esaurito">Esaurito</option>
-                </select>
               </div>
               <div className="form-group">
                 <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
@@ -1062,6 +1391,279 @@ export default function Materials() {
                 </button>
                 <button type="submit" className="btn-primary" disabled={uploading}>
                   {uploading ? 'Caricamento...' : (editingMaterial ? 'Salva' : 'Crea')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modale Bobine Materiale */}
+      {showSpoolsModal && selectedMaterialForSpools && (
+        <div className="modal-overlay" onClick={() => { setShowSpoolsModal(false); setSelectedMaterialForSpools(null) }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2 style={{ margin: 0 }}>
+                Bobine - {selectedMaterialForSpools.brand} - {selectedMaterialForSpools.material_type} - {selectedMaterialForSpools.color}
+              </h2>
+              <button
+                onClick={() => { setShowSpoolsModal(false); setSelectedMaterialForSpools(null) }}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  color: '#7f8c8d'
+                }}
+              >
+                <FontAwesomeIcon icon={faXmark} />
+              </button>
+            </div>
+            
+            {(() => {
+              const materialSpools = getSpoolsForMaterial(selectedMaterialForSpools.id)
+              const totalRemaining = materialSpools.reduce((sum, spool) => sum + parseFloat(spool.remaining_grams || 0), 0)
+              
+              return (
+                <>
+                  <div style={{ marginBottom: '20px', padding: '15px', background: '#f8f9fa', borderRadius: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <div style={{ fontSize: '14px', color: '#666', marginBottom: '5px' }}>Totale Bobine</div>
+                        <div style={{ fontSize: '24px', fontWeight: '600', color: '#2d2d2d' }}>{materialSpools.length}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '14px', color: '#666', marginBottom: '5px' }}>Grammi Totali Disponibili</div>
+                        <div style={{ fontSize: '24px', fontWeight: '600', color: '#2d2d2d' }}>{totalRemaining.toFixed(2)}g</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: '15px' }}>
+                    <button
+                      className="btn-primary"
+                      onClick={() => {
+                        setShowSpoolsModal(false)
+                        setSpoolFormData({
+                          purchase_account: 'Fabio',
+                          purchased_from: '',
+                          remaining_grams: 1000,
+                          price: '',
+                          quantity: 1
+                        })
+                        setEditingSpool(null)
+                        setSelectedMaterialForSpool(selectedMaterialForSpools)
+                        setShowSpoolModal(true)
+                      }}
+                    >
+                      <FontAwesomeIcon icon={faPlus} style={{ marginRight: '8px' }} />
+                      Aggiungi Bobina
+                    </button>
+                  </div>
+
+                  {materialSpools.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
+                      <div style={{ fontSize: '48px', marginBottom: '10px' }}>📦</div>
+                      <div>Nessuna bobina disponibile per questo materiale</div>
+                    </div>
+                  ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', background: 'white', borderRadius: '8px', overflow: 'hidden' }}>
+                        <thead>
+                          <tr style={{ background: '#f8f9fa', borderBottom: '2px solid #e0e0e0' }}>
+                            <th style={{ padding: '12px', textAlign: 'left', fontSize: '14px', fontWeight: '600', color: '#2d2d2d' }}>Account</th>
+                            <th style={{ padding: '12px', textAlign: 'left', fontSize: '14px', fontWeight: '600', color: '#2d2d2d' }}>Acquistato da</th>
+                            <th style={{ padding: '12px', textAlign: 'left', fontSize: '14px', fontWeight: '600', color: '#2d2d2d' }}>Residuo</th>
+                            <th style={{ padding: '12px', textAlign: 'left', fontSize: '14px', fontWeight: '600', color: '#2d2d2d' }}>Prezzo</th>
+                            <th style={{ padding: '12px', textAlign: 'left', fontSize: '14px', fontWeight: '600', color: '#2d2d2d' }}>Data Creazione</th>
+                            <th style={{ padding: '12px', textAlign: 'center', fontSize: '14px', fontWeight: '600', color: '#2d2d2d' }}>Azioni</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {materialSpools.map((spool) => (
+                            <tr key={spool.id} style={{ borderBottom: '1px solid #e0e0e0' }}>
+                              <td style={{ padding: '12px', fontSize: '14px', color: '#2d2d2d', fontWeight: '600' }}>
+                                {spool.purchase_account}
+                              </td>
+                              <td style={{ padding: '12px', fontSize: '14px', color: '#666' }}>
+                                {spool.purchased_from || 'N/A'}
+                              </td>
+                              <td style={{ padding: '12px', fontSize: '14px', color: '#666' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: '150px' }}>
+                                  <div style={{ flex: 1, position: 'relative' }}>
+                                    <div
+                                      style={{
+                                        width: '100%',
+                                        height: '20px',
+                                        backgroundColor: '#e0e0e0',
+                                        borderRadius: '10px',
+                                        overflow: 'hidden',
+                                        position: 'relative'
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          width: `${(parseFloat(spool.remaining_grams || 0) / 1000) * 100}%`,
+                                          height: '100%',
+                                          backgroundColor: parseFloat(spool.remaining_grams || 0) >= 1000 ? '#27ae60' : parseFloat(spool.remaining_grams || 0) >= 500 ? '#f39c12' : '#e74c3c',
+                                          transition: 'width 0.3s ease',
+                                          borderRadius: '10px'
+                                        }}
+                                      />
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: '#666', marginTop: '2px', textAlign: 'center' }}>
+                                      {parseFloat(spool.remaining_grams || 0).toFixed(0)}g / 1000g
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td style={{ padding: '12px', fontSize: '14px', color: '#2d2d2d', fontWeight: '600' }}>
+                                €{parseFloat(spool.price || 0).toFixed(2)}/Kg
+                              </td>
+                              <td style={{ padding: '12px', fontSize: '13px', color: '#999' }}>
+                                {new Date(spool.created_at).toLocaleDateString('it-IT')}
+                              </td>
+                              <td style={{ padding: '12px', textAlign: 'center' }}>
+                                <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setShowSpoolsModal(false)
+                                      handleEditSpool(spool)
+                                    }}
+                                    style={{
+                                      background: '#3498db',
+                                      color: 'white',
+                                      border: 'none',
+                                      borderRadius: '4px',
+                                      padding: '6px 12px',
+                                      cursor: 'pointer',
+                                      fontSize: '12px',
+                                      fontWeight: '600'
+                                    }}
+                                    title="Modifica"
+                                  >
+                                    <FontAwesomeIcon icon={faEdit} />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      if (confirm('Sei sicuro di voler eliminare questa bobina?')) {
+                                        handleDeleteSpool(spool.id)
+                                      }
+                                    }}
+                                    style={{
+                                      background: '#e74c3c',
+                                      color: 'white',
+                                      border: 'none',
+                                      borderRadius: '4px',
+                                      padding: '6px 12px',
+                                      cursor: 'pointer',
+                                      fontSize: '12px',
+                                      fontWeight: '600'
+                                    }}
+                                    title="Elimina"
+                                  >
+                                    <FontAwesomeIcon icon={faTrash} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Modale Bobina */}
+      {showSpoolModal && (
+        <div className="modal-overlay" onClick={() => { setShowSpoolModal(false); resetSpoolForm() }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+            <h2>{editingSpool ? 'Modifica Bobina' : 'Nuova Bobina'}</h2>
+            {selectedMaterialForSpool && (
+              <div style={{ marginBottom: '20px', padding: '10px', background: '#f8f9fa', borderRadius: '6px' }}>
+                <strong>Materiale:</strong> {selectedMaterialForSpool.brand} - {selectedMaterialForSpool.material_type} - {selectedMaterialForSpool.color} ({selectedMaterialForSpool.code})
+              </div>
+            )}
+            <form onSubmit={handleCreateSpool}>
+              <div className="form-group">
+                <label>Account di Acquisto</label>
+                <select
+                  value={spoolFormData.purchase_account}
+                  onChange={(e) => setSpoolFormData({ ...spoolFormData, purchase_account: e.target.value })}
+                  required
+                >
+                  <option value="Fabio">Fabio</option>
+                  <option value="Mesmerized SRLS">Mesmerized SRLS</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Acquistato da</label>
+                <input
+                  type="text"
+                  value={spoolFormData.purchased_from}
+                  onChange={(e) => setSpoolFormData({ ...spoolFormData, purchased_from: e.target.value })}
+                  required
+                  placeholder="Es: Amazon, AliExpress, Negozio locale..."
+                />
+              </div>
+              <div style={{ display: 'flex', gap: '15px' }}>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label>Prezzo per Bobina (€)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={spoolFormData.price}
+                    onChange={(e) => setSpoolFormData({ ...spoolFormData, price: e.target.value })}
+                    required
+                    placeholder="0.00"
+                    disabled={!!editingSpool}
+                  />
+                  <small>Prezzo di acquisto per 1Kg</small>
+                </div>
+                {!editingSpool && (
+                  <div className="form-group" style={{ flex: 1 }}>
+                    <label>Quantità</label>
+                    <input
+                      type="number"
+                      step="1"
+                      min="1"
+                      value={spoolFormData.quantity}
+                      onChange={(e) => setSpoolFormData({ ...spoolFormData, quantity: parseInt(e.target.value) || 1 })}
+                      required
+                      placeholder="1"
+                    />
+                    <small>Numero di bobine da creare</small>
+                  </div>
+                )}
+              </div>
+              <div className="form-group">
+                <label>Grammi Residui</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="1000"
+                  value={spoolFormData.remaining_grams}
+                  onChange={(e) => setSpoolFormData({ ...spoolFormData, remaining_grams: e.target.value })}
+                  required
+                  placeholder="1000"
+                />
+                <small>Inserisci i grammi residui (massimo 1000g = 1Kg)</small>
+              </div>
+              <div className="modal-actions">
+                <button type="button" className="btn-secondary" onClick={() => { setShowSpoolModal(false); resetSpoolForm() }}>
+                  Annulla
+                </button>
+                <button type="submit" className="btn-primary">
+                  {editingSpool ? 'Salva' : 'Crea'}
                 </button>
               </div>
             </form>

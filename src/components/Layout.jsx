@@ -7,6 +7,7 @@ import {
   faBox, 
   faCube, 
   faShoppingBag, 
+  faPrint,
   faChartBar, 
   faCog, 
   faHistory 
@@ -51,6 +52,7 @@ export default function Layout({ children }) {
     { path: '/materials', label: 'Materiali', icon: faBox },
     { path: '/models', label: 'Modelli', icon: faCube },
     { path: '/products', label: 'Prodotti', icon: faShoppingBag },
+    { path: '/print-queue', label: 'Coda di Stampa', icon: faPrint },
     { path: '/reports', label: 'Report', icon: faChartBar },
     { path: '/settings', label: 'Impostazioni', icon: faCog },
   ]

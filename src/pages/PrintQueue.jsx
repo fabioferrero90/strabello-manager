@@ -1,0 +1,2185 @@
+import { useEffect, useState } from 'react'
+import { supabase } from '../lib/supabase'
+import { logAction } from '../lib/logging'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faCheck, faTrash, faEdit, faPlus, faTimes, faMinus } from '@fortawesome/free-solid-svg-icons'
+import './Products.css'
+
+export default function PrintQueue() {
+  const [products, setProducts] = useState([])
+  const [filteredProducts, setFilteredProducts] = useState([])
+  const [materials, setMaterials] = useState([])
+  const [models, setModels] = useState([])
+  const [spools, setSpools] = useState([])
+  const [availableSpools, setAvailableSpools] = useState([]) // Bobine disponibili per il materiale selezionato
+  const [loading, setLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [sortBy, setSortBy] = useState('created_at')
+  const [showModal, setShowModal] = useState(false) // Modal per creazione prodotto
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editingProduct, setEditingProduct] = useState(null)
+  const [detailProduct, setDetailProduct] = useState(null)
+  const [showDetailModal, setShowDetailModal] = useState(false)
+  const [editFormData, setEditFormData] = useState({
+    material_id: '',
+    spool_id: '',
+  })
+  const [editAvailableSpools, setEditAvailableSpools] = useState([])
+  const [showMaterialDropdown, setShowMaterialDropdown] = useState(false)
+  const [materialSearch, setMaterialSearch] = useState('')
+  const [hoveredMaterial, setHoveredMaterial] = useState(null)
+  const [hoveredModel, setHoveredModel] = useState(null)
+  const [showModelDropdown, setShowModelDropdown] = useState(false)
+  const [modelSearch, setModelSearch] = useState('')
+  const [formData, setFormData] = useState({
+    model_id: '',
+    material_id: '',
+    spool_id: '',
+    sale_price: '',
+  })
+  const [multimaterialMapping, setMultimaterialMapping] = useState({
+    color1: '',
+    color2: '',
+    color3: '',
+    color4: '',
+  })
+  const [multimaterialSpools, setMultimaterialSpools] = useState({
+    color1: '',
+    color2: '',
+    color3: '',
+    color4: '',
+  })
+  const [multimaterialAvailableSpools, setMultimaterialAvailableSpools] = useState({
+    color1: [],
+    color2: [],
+    color3: [],
+    color4: [],
+  })
+
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  useEffect(() => {
+    if (products.length > 0) {
+      applySearchFilter(products, searchQuery, sortBy)
+    }
+  }, [searchQuery, sortBy, products])
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showModelDropdown || showMaterialDropdown) {
+        const target = event.target
+        if (!target.closest('.form-group')) {
+          setShowModelDropdown(false)
+          setShowMaterialDropdown(false)
+        }
+      }
+    }
+
+    if (showModelDropdown || showMaterialDropdown) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside)
+      }
+    }
+  }, [showModelDropdown, showMaterialDropdown])
+
+  // Carica le bobine disponibili quando cambia il materiale selezionato o il modello
+  useEffect(() => {
+    if (formData.material_id && formData.model_id) {
+      const selectedModel = models.find(m => m.id === formData.model_id)
+      if (selectedModel && !selectedModel.is_multimaterial) {
+        // Calcola il peso necessario in grammi
+        const requiredGrams = parseFloat(selectedModel.weight_kg) * 1000
+        
+        // Filtra le bobine che hanno grammi sufficienti
+        const materialSpools = spools.filter(
+          spool => spool.material_id === formData.material_id && 
+                   parseFloat(spool.remaining_grams) >= requiredGrams
+        )
+        setAvailableSpools(materialSpools)
+        
+        // Seleziona di default una bobina già consumata se presente, altrimenti la prima disponibile
+        if (materialSpools.length > 0 && !formData.spool_id) {
+          // Cerca prima una bobina già consumata (remaining_grams < 1000)
+          const consumedSpool = materialSpools.find(s => parseFloat(s.remaining_grams) < 1000)
+          const defaultSpoolId = consumedSpool ? consumedSpool.id : materialSpools[0].id
+          setFormData({ ...formData, spool_id: defaultSpoolId })
+        }
+        
+        // Reset spool_id se non è più disponibile
+        if (formData.spool_id && !materialSpools.find(s => s.id === formData.spool_id)) {
+          // Seleziona di default una bobina già consumata se presente, altrimenti la prima disponibile
+          if (materialSpools.length > 0) {
+            const consumedSpool = materialSpools.find(s => parseFloat(s.remaining_grams) < 1000)
+            const defaultSpoolId = consumedSpool ? consumedSpool.id : materialSpools[0].id
+            setFormData({ ...formData, spool_id: defaultSpoolId })
+          } else {
+            setFormData({ ...formData, spool_id: '' })
+          }
+        }
+      } else {
+        // Per modelli multimateriale o senza modello, mostra tutte le bobine con grammi > 0
+        const materialSpools = spools.filter(
+          spool => spool.material_id === formData.material_id && parseFloat(spool.remaining_grams) > 0
+        )
+        setAvailableSpools(materialSpools)
+      }
+    } else {
+      setAvailableSpools([])
+      setFormData({ ...formData, spool_id: '' })
+    }
+  }, [formData.material_id, formData.model_id, spools, models])
+
+  // Reset multimaterial mapping quando cambia il modello selezionato
+  useEffect(() => {
+    const selectedModel = models.find((m) => m.id === formData.model_id)
+    if (!selectedModel || !selectedModel.is_multimaterial) {
+      setMultimaterialMapping({
+        color1: '',
+        color2: '',
+        color3: '',
+        color4: '',
+      })
+      setMultimaterialSpools({
+        color1: '',
+        color2: '',
+        color3: '',
+        color4: '',
+      })
+      setMultimaterialAvailableSpools({
+        color1: [],
+        color2: [],
+        color3: [],
+        color4: [],
+      })
+    }
+  }, [formData.model_id, models])
+
+  // Carica le bobine disponibili per ogni materiale multimateriale selezionato
+  useEffect(() => {
+    const selectedModel = models.find((m) => m.id === formData.model_id)
+    if (!selectedModel?.is_multimaterial) return
+
+    const colorKeys = ['color1', 'color2', 'color3', 'color4']
+    const newAvailableSpools = { ...multimaterialAvailableSpools }
+
+    colorKeys.forEach((colorKey) => {
+      const materialId = multimaterialMapping[colorKey]
+      if (materialId) {
+        const weightGrams = parseFloat(selectedModel[`${colorKey}_weight_g`] || 0)
+        const materialSpools = spools.filter(
+          spool => spool.material_id === materialId && 
+                   parseFloat(spool.remaining_grams) >= weightGrams
+        )
+        newAvailableSpools[colorKey] = materialSpools
+
+        // Seleziona di default una bobina già consumata se presente
+        if (materialSpools.length > 0 && !multimaterialSpools[colorKey]) {
+          const consumedSpool = materialSpools.find(s => parseFloat(s.remaining_grams) < 1000)
+          const defaultSpoolId = consumedSpool ? consumedSpool.id : materialSpools[0].id
+          setMultimaterialSpools(prev => ({ ...prev, [colorKey]: defaultSpoolId }))
+        }
+      } else {
+        newAvailableSpools[colorKey] = []
+      }
+    })
+
+    setMultimaterialAvailableSpools(newAvailableSpools)
+  }, [multimaterialMapping, formData.model_id, models, spools])
+
+  // Carica le bobine disponibili quando si modifica un prodotto
+  useEffect(() => {
+    if (editFormData.material_id && editingProduct) {
+      const productModel = models.find(m => m.id === editingProduct.model_id)
+      if (productModel && !productModel.is_multimaterial) {
+        const requiredGrams = parseFloat(productModel.weight_kg) * 1000
+        const materialSpools = spools.filter(
+          spool => spool.material_id === editFormData.material_id && 
+                   parseFloat(spool.remaining_grams) >= requiredGrams
+        )
+        setEditAvailableSpools(materialSpools)
+        if (materialSpools.length > 0 && !editFormData.spool_id) {
+          const consumedSpool = materialSpools.find(s => parseFloat(s.remaining_grams) < 1000)
+          const defaultSpoolId = consumedSpool ? consumedSpool.id : materialSpools[0].id
+          setEditFormData({ ...editFormData, spool_id: defaultSpoolId })
+        }
+      } else {
+        const materialSpools = spools.filter(
+          spool => spool.material_id === editFormData.material_id && parseFloat(spool.remaining_grams) > 0
+        )
+        setEditAvailableSpools(materialSpools)
+      }
+    } else {
+      setEditAvailableSpools([])
+    }
+  }, [editFormData.material_id, editingProduct, spools, models])
+
+  const loadData = async () => {
+    const [materialsRes, modelsRes, productsRes, spoolsRes] = await Promise.all([
+      supabase.from('materials').select('*').order('brand'),
+      supabase.from('models').select('*').order('name'),
+      supabase
+        .from('products')
+        .select(`
+          *,
+          models(name, weight_kg, photo_url, description, dimensions, sku, is_multimaterial),
+          materials(brand, material_type, color, color_hex, purchased_from, cost_per_kg, bobina_photo_url, print_example_photo_url, code, status)
+        `)
+        .order('created_at', { ascending: false }),
+      supabase.from('spools').select('*').order('created_at', { ascending: false }),
+    ])
+
+    setMaterials(materialsRes.data || [])
+    setModels(modelsRes.data || [])
+    setProducts(productsRes.data || [])
+    setSpools(spoolsRes.data || [])
+    applySearchFilter(productsRes.data || [], searchQuery, sortBy)
+    setLoading(false)
+  }
+
+  const applySearchFilter = (productsList, query, sortValue) => {
+    // Mostra solo prodotti con stato "in_coda"
+    let filtered = productsList.filter(product => product.status === 'in_coda')
+
+    // Filtro ricerca
+    if (query.trim()) {
+      const queryLower = query.toLowerCase()
+      filtered = filtered.filter((product) => {
+        if (product.sku?.toLowerCase().includes(queryLower)) return true
+        if (product.models?.name?.toLowerCase().includes(queryLower)) return true
+        if (product.materials?.brand?.toLowerCase().includes(queryLower)) return true
+        if (product.materials?.material_type?.toLowerCase().includes(queryLower)) return true
+        if (product.materials?.color?.toLowerCase().includes(queryLower)) return true
+        return false
+      })
+    }
+
+    // Ordinamento
+    filtered.sort((a, b) => {
+      if (sortValue === 'nome_crescente') {
+        return (a.models?.name || '').localeCompare(b.models?.name || '')
+      } else if (sortValue === 'nome_decrescente') {
+        return (b.models?.name || '').localeCompare(a.models?.name || '')
+      } else if (sortValue === 'materiale_crescente') {
+        return (a.materials?.material_type || '').localeCompare(b.materials?.material_type || '')
+      } else if (sortValue === 'materiale_decrescente') {
+        return (b.materials?.material_type || '').localeCompare(a.materials?.material_type || '')
+      } else if (sortValue === 'prezzo_crescente') {
+        return parseFloat(a.sale_price || 0) - parseFloat(b.sale_price || 0)
+      } else if (sortValue === 'prezzo_decrescente') {
+        return parseFloat(b.sale_price || 0) - parseFloat(a.sale_price || 0)
+      } else {
+        const dateA = new Date(a.created_at || 0)
+        const dateB = new Date(b.created_at || 0)
+        return dateB - dateA
+      }
+    })
+
+    setFilteredProducts(filtered)
+  }
+
+  const calculateProductionCost = (modelId, materialId, multimaterialMap = null, multimaterialSpoolsMap = null) => {
+    const model = models.find((m) => m.id === modelId)
+    if (!model) return '0.00'
+
+    // Se il modello è multimateriale, calcola il costo usando i prezzi delle bobine
+    if (model.is_multimaterial && multimaterialMap) {
+      let totalCost = 0
+      
+      // Colore 1
+      if (model.color1_weight_g && multimaterialMap.color1) {
+        const weightKg1 = parseFloat(model.color1_weight_g) / 1000
+        if (multimaterialSpoolsMap?.color1) {
+          const spool1 = spools.find(s => s.id === multimaterialSpoolsMap.color1)
+          if (spool1) {
+            totalCost += weightKg1 * parseFloat(spool1.price || 0)
+          }
+        } else {
+          // Fallback al costo del materiale se bobina non selezionata
+          const material1 = materials.find((m) => m.id === multimaterialMap.color1)
+          if (material1) {
+            totalCost += weightKg1 * parseFloat(material1.cost_per_kg || 0)
+          }
+        }
+      }
+      
+      // Colore 2
+      if (model.color2_weight_g && multimaterialMap.color2) {
+        const weightKg2 = parseFloat(model.color2_weight_g) / 1000
+        if (multimaterialSpoolsMap?.color2) {
+          const spool2 = spools.find(s => s.id === multimaterialSpoolsMap.color2)
+          if (spool2) {
+            totalCost += weightKg2 * parseFloat(spool2.price || 0)
+          }
+        } else {
+          const material2 = materials.find((m) => m.id === multimaterialMap.color2)
+          if (material2) {
+            totalCost += weightKg2 * parseFloat(material2.cost_per_kg || 0)
+          }
+        }
+      }
+      
+      // Colore 3
+      if (model.color3_weight_g && multimaterialMap.color3) {
+        const weightKg3 = parseFloat(model.color3_weight_g) / 1000
+        if (multimaterialSpoolsMap?.color3) {
+          const spool3 = spools.find(s => s.id === multimaterialSpoolsMap.color3)
+          if (spool3) {
+            totalCost += weightKg3 * parseFloat(spool3.price || 0)
+          }
+        } else {
+          const material3 = materials.find((m) => m.id === multimaterialMap.color3)
+          if (material3) {
+            totalCost += weightKg3 * parseFloat(material3.cost_per_kg || 0)
+          }
+        }
+      }
+      
+      // Colore 4
+      if (model.color4_weight_g && multimaterialMap.color4) {
+        const weightKg4 = parseFloat(model.color4_weight_g) / 1000
+        if (multimaterialSpoolsMap?.color4) {
+          const spool4 = spools.find(s => s.id === multimaterialSpoolsMap.color4)
+          if (spool4) {
+            totalCost += weightKg4 * parseFloat(spool4.price || 0)
+          }
+        } else {
+          const material4 = materials.find((m) => m.id === multimaterialMap.color4)
+          if (material4) {
+            totalCost += weightKg4 * parseFloat(material4.cost_per_kg || 0)
+          }
+        }
+      }
+      
+      return totalCost.toFixed(2)
+    }
+    
+    // Calcolo normale per modelli non multimateriale
+    const material = materials.find((m) => m.id === materialId)
+    if (model && material) {
+      return (parseFloat(model.weight_kg) * parseFloat(material.cost_per_kg || 0)).toFixed(2)
+    }
+    return '0.00'
+  }
+
+  const resetForm = () => {
+    setFormData({
+      model_id: '',
+      material_id: '',
+      spool_id: '',
+      sale_price: '',
+    })
+    setAvailableSpools([])
+    setMultimaterialMapping({
+      color1: '',
+      color2: '',
+      color3: '',
+      color4: '',
+    })
+    setMultimaterialSpools({
+      color1: '',
+      color2: '',
+      color3: '',
+      color4: '',
+    })
+    setMultimaterialAvailableSpools({
+      color1: [],
+      color2: [],
+      color3: [],
+      color4: [],
+    })
+  }
+
+  const handleCreateProduct = async (e) => {
+    e.preventDefault()
+    const model = models.find((m) => m.id === formData.model_id)
+
+    if (!model) {
+      alert('Seleziona un modello')
+      return
+    }
+
+    if (!model.sku) {
+      alert('Il modello selezionato non ha uno SKU genitore. Aggiungi uno SKU al modello prima di creare il prodotto.')
+      return
+    }
+
+    let productionCost = 0
+    let productSku = ''
+    let materialId = null
+    let mappingForDb = null
+    let spoolUpdates = []
+
+    if (model.is_multimaterial) {
+      // Validazione per modelli multimateriale
+      if (!multimaterialMapping.color1 || !multimaterialMapping.color2) {
+        alert('Seleziona almeno i materiali per Colore 1 e Colore 2')
+        return
+      }
+
+      // Verifica che tutti i materiali selezionati abbiano un codice
+      const selectedMaterials = [
+        { color: 1, id: multimaterialMapping.color1 },
+        { color: 2, id: multimaterialMapping.color2 },
+        ...(multimaterialMapping.color3 ? [{ color: 3, id: multimaterialMapping.color3 }] : []),
+        ...(multimaterialMapping.color4 ? [{ color: 4, id: multimaterialMapping.color4 }] : []),
+      ]
+
+      for (const { color, id } of selectedMaterials) {
+        const material = materials.find((m) => m.id === id)
+        if (!material) {
+          alert(`Materiale per Colore ${color} non trovato`)
+          return
+        }
+        if (!material.code) {
+          alert(`Il materiale per Colore ${color} non ha un codice. Aggiungi un codice al materiale prima di creare il prodotto.`)
+          return
+        }
+      }
+
+      // Validazione bobine per prodotti multimateriale
+      for (const { color } of selectedMaterials) {
+        const colorKey = `color${color}`
+        if (!multimaterialSpools[colorKey]) {
+          alert(`Seleziona una bobina per Colore ${color}`)
+          return
+        }
+        const selectedSpool = spools.find(s => s.id === multimaterialSpools[colorKey])
+        if (!selectedSpool) {
+          alert(`Bobina per Colore ${color} non trovata`)
+          return
+        }
+        const weightGrams = parseFloat(model[`${colorKey}_weight_g`] || 0)
+        const remainingGrams = parseFloat(selectedSpool.remaining_grams)
+        if (weightGrams > remainingGrams) {
+          alert(`La bobina per Colore ${color} ha solo ${remainingGrams.toFixed(2)}g disponibili, ma richiede ${weightGrams.toFixed(2)}g`)
+          return
+        }
+      }
+
+      // Crea il mapping per il database includendo le bobine
+      mappingForDb = selectedMaterials.map(({ color, id }) => ({
+        color,
+        material_id: id,
+        spool_id: multimaterialSpools[`color${color}`] || null,
+      }))
+
+      // Calcola il costo di produzione usando i prezzi delle bobine
+      productionCost = parseFloat(calculateProductionCost(formData.model_id, null, multimaterialMapping, multimaterialSpools))
+
+      // Genera SKU: SKU modello + codici materiali separati da "-"
+      const materialCodes = selectedMaterials
+        .map(({ id }) => materials.find((m) => m.id === id)?.code)
+        .filter(Boolean)
+        .join('-')
+      productSku = `${model.sku}-${materialCodes}`
+
+      // Usa il primo materiale come material_id principale (per retrocompatibilità)
+      materialId = mappingForDb[0].material_id
+
+      // Memorizza i dati delle bobine per eventuale rollback
+      const spoolUpdates = []
+      
+      // Scala i grammi da ogni bobina utilizzata
+      for (const { color } of selectedMaterials) {
+        const colorKey = `color${color}`
+        const selectedSpoolId = multimaterialSpools[colorKey]
+        const selectedSpool = spools.find(s => s.id === selectedSpoolId)
+        if (selectedSpool) {
+          const weightGrams = parseFloat(model[`${colorKey}_weight_g`] || 0)
+          const remainingGrams = parseFloat(selectedSpool.remaining_grams)
+          const newRemainingGrams = remainingGrams - weightGrams
+          
+          // Memorizza per eventuale rollback
+          spoolUpdates.push({
+            spoolId: selectedSpoolId,
+            oldGrams: remainingGrams,
+            newGrams: newRemainingGrams,
+            weightGrams: weightGrams
+          })
+          
+          const { error: spoolError } = await supabase
+            .from('spools')
+            .update({ remaining_grams: newRemainingGrams })
+            .eq('id', selectedSpoolId)
+
+          if (spoolError) {
+            alert(`Errore durante l'aggiornamento della bobina per Colore ${color}: ` + spoolError.message)
+            // Ripristina le bobine già aggiornate
+            for (const update of spoolUpdates) {
+              await supabase
+                .from('spools')
+                .update({ remaining_grams: update.oldGrams })
+                .eq('id', update.spoolId)
+            }
+            return
+          }
+          
+          // Aggiorna lo stato locale per riflettere immediatamente il cambiamento
+          setSpools(prevSpools => prevSpools.map(spool => 
+            spool.id === selectedSpoolId 
+              ? { ...spool, remaining_grams: newRemainingGrams }
+              : spool
+          ))
+        }
+      }
+    } else {
+      // Logica normale per modelli non multimateriale
+      const material = materials.find((m) => m.id === formData.material_id)
+
+      if (!material) {
+        alert('Seleziona un materiale')
+        return
+      }
+
+      if (!material.code) {
+        alert('Il materiale selezionato non ha un codice. Aggiungi un codice al materiale prima di creare il prodotto.')
+        return
+      }
+
+      materialId = formData.material_id
+      productSku = `${model.sku}-${material.code}`
+    }
+
+    // Validazione bobina per prodotti non multimateriale
+    let selectedSpoolId = null
+    let spoolPrice = null
+    let spoolUpdate = null
+    if (!model.is_multimaterial) {
+      if (!formData.spool_id) {
+        alert('Seleziona una bobina per questo materiale')
+        return
+      }
+
+      const selectedSpool = spools.find(s => s.id === formData.spool_id)
+      if (!selectedSpool) {
+        alert('Bobina selezionata non trovata')
+        return
+      }
+
+      // Calcola il peso in grammi del prodotto
+      const weightGrams = parseFloat(model.weight_kg) * 1000
+      const remainingGrams = parseFloat(selectedSpool.remaining_grams)
+
+      if (weightGrams > remainingGrams) {
+        alert(`La bobina selezionata ha solo ${remainingGrams.toFixed(2)}g disponibili, ma il prodotto richiede ${weightGrams.toFixed(2)}g`)
+        return
+      }
+
+      selectedSpoolId = formData.spool_id
+      spoolPrice = parseFloat(selectedSpool.price || 0)
+
+      // Calcola il costo di produzione usando il prezzo della bobina
+      productionCost = parseFloat(model.weight_kg) * spoolPrice
+
+      // Scala i grammi dalla bobina
+      const newRemainingGrams = remainingGrams - weightGrams
+      const { error: spoolError } = await supabase
+        .from('spools')
+        .update({ remaining_grams: newRemainingGrams })
+        .eq('id', selectedSpoolId)
+
+      if (spoolError) {
+        alert('Errore durante l\'aggiornamento della bobina: ' + spoolError.message)
+        return
+      }
+      
+      // Memorizza per eventuale rollback
+      spoolUpdate = {
+        spoolId: selectedSpoolId,
+        oldGrams: remainingGrams,
+        newGrams: newRemainingGrams,
+        weightGrams: weightGrams
+      }
+      
+      // Aggiorna lo stato locale per riflettere immediatamente il cambiamento
+      const updatedSpools = spools.map(spool => 
+        spool.id === selectedSpoolId 
+          ? { ...spool, remaining_grams: newRemainingGrams }
+          : spool
+      )
+      setSpools(updatedSpools)
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    const { data, error } = await supabase.from('products').insert([
+      {
+        model_id: formData.model_id,
+        material_id: materialId,
+        spool_id: model.is_multimaterial ? null : selectedSpoolId, // Per multimateriale, le bobine sono nel mapping
+        sku: productSku,
+        sale_price: parseFloat(formData.sale_price),
+        production_cost: productionCost,
+        packaging_cost: 0,
+        administrative_cost: 0,
+        status: 'in_coda',
+        quantity: 1, // Prodotti sempre unici
+        multimaterial_mapping: mappingForDb,
+        created_by: user?.id,
+      },
+    ]).select().single()
+
+    if (error) {
+      // Ripristina i grammi se l'inserimento del prodotto fallisce
+      if (model.is_multimaterial && spoolUpdates) {
+        for (const update of spoolUpdates) {
+          await supabase
+            .from('spools')
+            .update({ remaining_grams: update.oldGrams })
+            .eq('id', update.spoolId)
+        }
+      } else if (!model.is_multimaterial && spoolUpdate) {
+        await supabase
+          .from('spools')
+          .update({ remaining_grams: spoolUpdate.oldGrams })
+          .eq('id', spoolUpdate.spoolId)
+      }
+      alert('Errore durante la creazione: ' + error.message)
+    } else {
+      // Log dell'operazione
+      await logAction(
+        'aggiunta_prodotto',
+        'prodotto',
+        data.id,
+        productSku,
+        { product_data: { sku: productSku, model_id: formData.model_id, material_id: materialId, spool_id: selectedSpoolId } }
+      )
+      await loadData()
+      setShowModal(false)
+      resetForm()
+    }
+  }
+
+  const handleStatusChange = async (id, newStatus) => {
+    try {
+      const { error } = await supabase
+        .from('products')
+        .update({ status: newStatus })
+        .eq('id', id)
+
+      if (error) throw error
+
+      const product = products.find((p) => p.id === id)
+      await logAction(
+        'modifica_prodotto',
+        'prodotto',
+        id,
+        product?.sku || 'Prodotto sconosciuto',
+        { status_change: { from: product?.status, to: newStatus } }
+      )
+
+      await loadData()
+    } catch (error) {
+      console.error('Error updating status:', error)
+      alert('Errore durante l\'aggiornamento dello stato')
+    }
+  }
+
+  const handleEditProduct = (product) => {
+    const productModel = models.find(m => m.id === product.model_id)
+    if (productModel?.is_multimaterial) {
+      alert('La modifica del materiale non è disponibile per prodotti multimateriale')
+      return
+    }
+    
+    setEditingProduct(product)
+    setEditFormData({
+      material_id: product.material_id || '',
+      spool_id: product.spool_id || '',
+    })
+    setShowEditModal(true)
+  }
+
+  const handleUpdateProduct = async (e) => {
+    e.preventDefault()
+    
+    if (!editingProduct) return
+    
+    if (!editFormData.material_id) {
+      alert('Seleziona un materiale')
+      return
+    }
+    
+    if (!editFormData.spool_id) {
+      alert('Seleziona una bobina')
+      return
+    }
+
+    try {
+      const selectedSpool = spools.find(s => s.id === editFormData.spool_id)
+      if (!selectedSpool) {
+        alert('Bobina non trovata')
+        return
+      }
+
+      const productModel = models.find(m => m.id === editingProduct.model_id)
+      if (!productModel) {
+        alert('Modello non trovato')
+        return
+      }
+
+      const spoolPrice = parseFloat(selectedSpool.price || 0)
+      const newProductionCost = parseFloat(productModel.weight_kg) * spoolPrice
+
+      const { error: updateError } = await supabase
+        .from('products')
+        .update({
+          material_id: editFormData.material_id,
+          spool_id: editFormData.spool_id,
+          production_cost: newProductionCost,
+        })
+        .eq('id', editingProduct.id)
+
+      if (updateError) {
+        throw new Error('Errore durante l\'aggiornamento: ' + updateError.message)
+      }
+
+      const material = materials.find(m => m.id === editFormData.material_id)
+      await logAction(
+        'modifica_prodotto',
+        'prodotto',
+        editingProduct.id,
+        `${editingProduct.sku} - Materiale aggiornato: ${material?.brand || 'N/A'}`,
+        { 
+          old_material_id: editingProduct.material_id,
+          new_material_id: editFormData.material_id,
+          old_spool_id: editingProduct.spool_id,
+          new_spool_id: editFormData.spool_id,
+          old_production_cost: editingProduct.production_cost,
+          new_production_cost: newProductionCost
+        }
+      )
+
+      await loadData()
+      setShowEditModal(false)
+      setEditingProduct(null)
+      setEditFormData({ material_id: '', spool_id: '' })
+      alert('Prodotto aggiornato con successo!')
+    } catch (error) {
+      console.error('Error:', error)
+      alert('Errore durante l\'aggiornamento: ' + error.message)
+    }
+  }
+
+  const handleDelete = async (id) => {
+    if (!confirm('Sei sicuro di voler eliminare questo prodotto?')) return
+
+    const product = products.find((p) => p.id === id)
+    const productSku = product?.sku || 'Prodotto sconosciuto'
+
+    const { error } = await supabase.from('products').delete().eq('id', id)
+
+    if (error) {
+      alert('Errore durante l\'eliminazione: ' + error.message)
+    } else {
+      await logAction(
+        'eliminazione_prodotto',
+        'prodotto',
+        id,
+        productSku,
+        { product_data: product }
+      )
+      await loadData()
+    }
+  }
+
+  const handleProductClick = (product) => {
+    setDetailProduct(product)
+    setShowDetailModal(true)
+  }
+
+  const formatDate = (dateString) => {
+    if (!dateString) return '-'
+    const date = new Date(dateString)
+    return date.toLocaleDateString('it-IT', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  }
+
+  const getStatusBadge = (status) => {
+    const badges = {
+      in_coda: { label: 'In Coda', class: 'status-queue' },
+      disponibile: { label: 'Disponibile', class: 'status-available' },
+      venduto: { label: 'Venduto', class: 'status-sold' },
+    }
+    return badges[status] || badges.in_coda
+  }
+
+  if (loading) return <div className="loading">Caricamento...</div>
+
+  const selectedModel = models.find((m) => m.id === formData.model_id)
+
+  return (
+    <div className="products-page">
+      <div className="page-header">
+        <h1>Coda di Stampa</h1>
+        <button className="btn-primary" onClick={() => { resetForm(); setShowModal(true) }}>
+          <FontAwesomeIcon icon={faPlus} style={{ marginRight: '8px' }} />
+          Nuovo Prodotto
+        </button>
+      </div>
+
+      {/* Barra di ricerca e ordinamento */}
+      <div style={{
+        background: 'white',
+        padding: '20px',
+        borderRadius: '12px',
+        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+        marginBottom: '20px'
+      }}>
+        <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+          <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
+            <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
+              Cerca Prodotti
+            </label>
+            <input
+              type="text"
+              placeholder="Cerca per SKU, modello, brand, materiale o colore..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '2px solid #e0e0e0',
+                borderRadius: '8px',
+                fontSize: '14px'
+              }}
+            />
+            <small style={{ display: 'block', marginTop: '5px', color: '#7f8c8d', fontSize: '12px' }}>
+              {filteredProducts.length} {filteredProducts.length === 1 ? 'prodotto trovato' : 'prodotti trovati'}
+              {searchQuery && ` per "${searchQuery}"`}
+            </small>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0, flex: '0 0 300px', display: 'flex', flexDirection: 'column' }}>
+            <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
+              Ordina per
+            </label>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '2px solid #e0e0e0',
+                borderRadius: '8px',
+                fontSize: '14px',
+                background: 'white',
+                marginTop: 'auto'
+              }}
+            >
+              <option value="created_at">Data Caricamento (Più recenti)</option>
+              <option value="nome_crescente">Nome Crescente</option>
+              <option value="nome_decrescente">Nome Decrescente</option>
+              <option value="materiale_crescente">Materiale Crescente</option>
+              <option value="materiale_decrescente">Materiale Decrescente</option>
+              <option value="prezzo_crescente">Prezzo Vendita Crescente</option>
+              <option value="prezzo_decrescente">Prezzo Vendita Decrescente</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="products-table-container">
+        <table className="products-table">
+          <thead>
+            <tr>
+              <th>SKU</th>
+              <th>Modello</th>
+              <th>Materiale</th>
+              <th>Stato</th>
+              <th>Costo Produzione</th>
+              <th>Prezzo Vendita</th>
+              <th>Azioni</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredProducts.length === 0 ? (
+              <tr>
+                <td colSpan="7" style={{ textAlign: 'center', padding: '40px', color: '#7f8c8d' }}>
+                  {searchQuery
+                    ? 'Nessun prodotto corrisponde alla ricerca.'
+                    : 'Nessun prodotto in coda di stampa.'}
+                </td>
+              </tr>
+            ) : (
+              filteredProducts.map((product) => {
+                const statusBadge = getStatusBadge(product.status)
+                return (
+                  <tr 
+                    key={product.id}
+                    className="product-row"
+                    onClick={(e) => {
+                      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+                        return
+                      }
+                      handleProductClick(product)
+                    }}
+                  >
+                    <td>
+                      <strong>{product.sku || 'N/A'}</strong>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        {product.models?.photo_url && (
+                          <img
+                            src={product.models.photo_url}
+                            alt={product.models.name}
+                            style={{
+                              width: '40px',
+                              height: '40px',
+                              objectFit: 'cover',
+                              borderRadius: '4px',
+                              border: '1px solid #e0e0e0'
+                            }}
+                          />
+                        )}
+                        <span>{product.models?.name || 'N/A'}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        {product.materials?.bobina_photo_url && (
+                          <img
+                            src={product.materials.bobina_photo_url}
+                            alt={product.materials.brand}
+                            style={{
+                              width: '40px',
+                              height: '40px',
+                              objectFit: 'cover',
+                              borderRadius: '4px',
+                              border: '1px solid #e0e0e0'
+                            }}
+                          />
+                        )}
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <strong>{product.materials?.brand || 'N/A'}</strong>
+                            {product.multimaterial_mapping && Array.isArray(product.multimaterial_mapping) && product.multimaterial_mapping.length > 1 && (
+                              <span
+                                style={{
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  background: '#2d2d2d',
+                                  color: 'white',
+                                  fontSize: '11px',
+                                  fontWeight: '600',
+                                  lineHeight: '1.2'
+                                }}
+                                title={`${product.multimaterial_mapping.length} materiali utilizzati`}
+                              >
+                                +{product.multimaterial_mapping.length - 1}
+                              </span>
+                            )}
+                          </div>
+                          <small style={{ color: '#7f8c8d', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            {product.materials?.material_type || ''} - 
+                            {product.materials?.color_hex && (
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  width: '12px',
+                                  height: '12px',
+                                  borderRadius: '50%',
+                                  backgroundColor: product.materials.color_hex,
+                                  border: '1px solid #ddd'
+                                }}
+                              />
+                            )}
+                            {product.materials?.color || ''}
+                          </small>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span className={`status-badge ${statusBadge.class}`}>
+                        {statusBadge.label}
+                      </span>
+                    </td>
+                    <td>
+                      €{(() => {
+                        const baseCost = parseFloat(product.production_cost || 0)
+                        const extraCosts = product.production_extra_costs || []
+                        const extraTotal = extraCosts.reduce((sum, cost) => sum + (parseFloat(cost?.amount || 0) || 0), 0)
+                        return (baseCost + extraTotal).toFixed(2)
+                      })()}
+                    </td>
+                    <td>€{parseFloat(product.sale_price).toFixed(2)}</td>
+                    <td>
+                      <div className="action-buttons">
+                        <button
+                          className="btn-status"
+                          onClick={() => handleStatusChange(product.id, 'disponibile')}
+                          title="Imposta come disponibile"
+                        >
+                          <FontAwesomeIcon icon={faCheck} />
+                        </button>
+                        <button 
+                          className="btn-edit" 
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleEditProduct(product)
+                          }} 
+                          title="Modifica materiale/bobina"
+                        >
+                          <FontAwesomeIcon icon={faEdit} />
+                        </button>
+                        <button className="btn-delete" onClick={() => handleDelete(product.id)} title="Elimina">
+                          <FontAwesomeIcon icon={faTrash} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Modale di modifica materiale/bobina - identica a Products.jsx */}
+      {showEditModal && editingProduct && (
+        <div className="modal-overlay" onClick={() => { setShowEditModal(false); setEditingProduct(null); setEditFormData({ material_id: '', spool_id: '' }) }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+            <h2>Modifica Materiale/Bobina</h2>
+            <form onSubmit={handleUpdateProduct}>
+              <div className="form-group">
+                <label>Prodotto</label>
+                <div style={{ padding: '10px', background: '#f8f9fa', borderRadius: '4px', fontSize: '14px' }}>
+                  <strong>{editingProduct.sku}</strong> - {editingProduct.models?.name || 'N/A'}
+                </div>
+              </div>
+
+              <div className="form-group" style={{ position: 'relative' }}>
+                <label>Materiale</label>
+                <div style={{ position: 'relative' }}>
+                  <div
+                    onClick={() => {
+                      setShowMaterialDropdown(showMaterialDropdown === 'edit' ? false : 'edit')
+                      if (showMaterialDropdown !== 'edit') {
+                        setMaterialSearch('')
+                      }
+                    }}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid #ced4da',
+                      borderRadius: '4px',
+                      background: 'white',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <span style={{ color: editFormData.material_id ? '#1a1a1a' : '#6c757d' }}>
+                      {editFormData.material_id
+                        ? (() => {
+                            const material = materials.find((m) => m.id === editFormData.material_id)
+                            return material
+                              ? `${material.brand} - ${material.material_type} - ${material.color}`
+                              : 'Seleziona materiale...'
+                          })()
+                        : 'Seleziona materiale...'}
+                    </span>
+                    <span style={{ color: '#6c757d' }}>▼</span>
+                  </div>
+                  {showMaterialDropdown === 'edit' && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        right: 0,
+                        zIndex: 1000,
+                        marginTop: '4px',
+                        background: 'white',
+                        border: '1px solid #ddd',
+                        borderRadius: '8px',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                        maxHeight: '400px',
+                        display: 'flex',
+                        flexDirection: 'column'
+                      }}
+                    >
+                      <div style={{ padding: '10px', borderBottom: '1px solid #f0f0f0' }}>
+                        <input
+                          type="text"
+                          placeholder="Cerca materiale..."
+                          value={materialSearch}
+                          onChange={(e) => {
+                            setMaterialSearch(e.target.value)
+                            setHoveredMaterial(null)
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            width: '100%',
+                            padding: '8px 12px',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px',
+                            fontSize: '14px'
+                          }}
+                          autoFocus
+                        />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', maxHeight: '300px' }}>
+                        {materials
+                          .filter((material) => {
+                            const materialSpools = spools.filter(
+                              spool => spool.material_id === material.id && parseFloat(spool.remaining_grams) > 0
+                            )
+                            return materialSpools.length > 0
+                          })
+                          .filter((material) => {
+                            if (!materialSearch) return true
+                            const search = materialSearch.toLowerCase()
+                            return (
+                              material.brand.toLowerCase().includes(search) ||
+                              material.material_type.toLowerCase().includes(search) ||
+                              material.color.toLowerCase().includes(search) ||
+                              material.code?.toLowerCase().includes(search)
+                            )
+                          })
+                          .map((material) => (
+                            <div
+                              key={material.id}
+                              onClick={() => {
+                                setEditFormData({ ...editFormData, material_id: material.id, spool_id: '' })
+                                setShowMaterialDropdown(false)
+                                setMaterialSearch('')
+                              }}
+                              style={{
+                                padding: '10px 12px',
+                                cursor: 'pointer',
+                                background: editFormData.material_id === material.id ? '#e8f4f8' : 'white',
+                                borderBottom: '1px solid #f0f0f0',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px'
+                              }}
+                            >
+                              {material.bobina_photo_url && (
+                                <img
+                                  src={material.bobina_photo_url}
+                                  alt={material.brand}
+                                  style={{
+                                    width: '40px',
+                                    height: '40px',
+                                    objectFit: 'cover',
+                                    borderRadius: '4px',
+                                    flexShrink: 0
+                                  }}
+                                />
+                              )}
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontWeight: '600', color: '#1a1a1a' }}>{material.brand}</div>
+                                <div style={{ fontSize: '12px', color: '#7f8c8d', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  {material.material_type} -{' '}
+                                  {material.color_hex && (
+                                    <span
+                                      style={{
+                                        display: 'inline-block',
+                                        width: '12px',
+                                        height: '12px',
+                                        borderRadius: '50%',
+                                        backgroundColor: material.color_hex,
+                                        border: '1px solid #ddd',
+                                        flexShrink: 0
+                                      }}
+                                    />
+                                  )}
+                                  {material.color}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {editFormData.material_id && (
+                <div className="form-group">
+                  <label>Bobina</label>
+                  {editAvailableSpools.length === 0 ? (
+                    <div style={{ padding: '10px', background: '#fff3cd', borderRadius: '4px', color: '#856404', fontSize: '14px' }}>
+                      Nessuna bobina disponibile per questo materiale.
+                    </div>
+                  ) : (
+                    <select
+                      value={editFormData.spool_id}
+                      onChange={(e) => setEditFormData({ ...editFormData, spool_id: e.target.value })}
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        border: '1px solid #ced4da',
+                        borderRadius: '4px',
+                        background: 'white',
+                        fontSize: '14px'
+                      }}
+                    >
+                      <option value="">Seleziona una bobina...</option>
+                      {editAvailableSpools.map((spool) => {
+                        const pricePerKg = parseFloat(spool.price || 0)
+                        return (
+                          <option key={spool.id} value={spool.id}>
+                            {spool.purchase_account} - €{pricePerKg.toFixed(2)}/kg - {parseFloat(spool.remaining_grams).toFixed(2)}g residui
+                          </option>
+                        )
+                      })}
+                    </select>
+                  )}
+                </div>
+              )}
+
+              <div className="modal-actions">
+                <button 
+                  type="button" 
+                  className="btn-secondary" 
+                  onClick={() => { 
+                    setShowEditModal(false)
+                    setEditingProduct(null)
+                    setEditFormData({ material_id: '', spool_id: '' })
+                  }}
+                >
+                  Annulla
+                </button>
+                <button 
+                  type="submit" 
+                  className="btn-primary"
+                  disabled={!editFormData.material_id || !editFormData.spool_id}
+                >
+                  Salva Modifiche
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modale dettaglio prodotto - semplificata */}
+      {showDetailModal && detailProduct && (
+        <div className="modal-overlay" onClick={() => { setShowDetailModal(false); setDetailProduct(null) }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto' }}>
+            <h2>Dettagli Prodotto</h2>
+            <div style={{ marginBottom: '20px' }}>
+              <div style={{ marginBottom: '10px' }}>
+                <strong>SKU:</strong> {detailProduct.sku}
+              </div>
+              <div style={{ marginBottom: '10px' }}>
+                <strong>Modello:</strong> {detailProduct.models?.name || 'N/A'}
+              </div>
+              <div style={{ marginBottom: '10px' }}>
+                <strong>Materiale:</strong> {detailProduct.materials?.brand || 'N/A'} - {detailProduct.materials?.material_type || 'N/A'} - {detailProduct.materials?.color || 'N/A'}
+              </div>
+              <div style={{ marginBottom: '10px' }}>
+                <strong>Costo Produzione:</strong> €{parseFloat(detailProduct.production_cost || 0).toFixed(2)}
+              </div>
+              <div style={{ marginBottom: '10px' }}>
+                <strong>Prezzo Vendita:</strong> €{parseFloat(detailProduct.sale_price || 0).toFixed(2)}
+              </div>
+              <div style={{ marginBottom: '10px' }}>
+                <strong>Creato il:</strong> {formatDate(detailProduct.created_at)}
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button 
+                type="button" 
+                className="btn-secondary" 
+                onClick={() => { setShowDetailModal(false); setDetailProduct(null) }}
+              >
+                Chiudi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal creazione prodotto */}
+      {showModal && (
+        <div className="modal-overlay" onClick={() => { setShowModal(false); resetForm() }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h2>Nuovo Prodotto</h2>
+            <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
+              <div
+                style={{
+                  flex: 1,
+                  aspectRatio: '1',
+                  border: '2px solid #e0e0e0',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: '#f8f9fa',
+                  minHeight: '150px'
+                }}
+              >
+                {formData.model_id ? (
+                  (() => {
+                    const selectedModel = models.find((m) => m.id === formData.model_id)
+                    return selectedModel?.photo_url ? (
+                      <img
+                        src={selectedModel.photo_url}
+                        alt={selectedModel.name}
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                          borderRadius: '6px'
+                        }}
+                      />
+                    ) : (
+                      <div style={{ textAlign: 'center', color: '#7f8c8d', padding: '20px' }}>
+                        <div style={{ fontSize: '24px', marginBottom: '8px' }}>📦</div>
+                        <div style={{ fontSize: '14px', fontWeight: '600' }}>{selectedModel?.name || 'Modello'}</div>
+                        <div style={{ fontSize: '12px', marginTop: '4px' }}>Nessuna immagine</div>
+                      </div>
+                    )
+                  })()
+                ) : (
+                  <div style={{ textAlign: 'center', color: '#7f8c8d' }}>
+                    <div style={{ fontSize: '32px', marginBottom: '8px' }}>📦</div>
+                    <div style={{ fontSize: '14px', fontWeight: '600' }}>Seleziona un modello</div>
+                  </div>
+                )}
+              </div>
+              <div
+                style={{
+                  flex: 1,
+                  aspectRatio: '1',
+                  border: '2px solid #e0e0e0',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: '#f8f9fa',
+                  minHeight: '150px'
+                }}
+              >
+                {formData.material_id ? (
+                  (() => {
+                    const selectedMaterial = materials.find((m) => m.id === formData.material_id)
+                    return selectedMaterial?.bobina_photo_url ? (
+                      <img
+                        src={selectedMaterial.bobina_photo_url}
+                        alt={selectedMaterial.brand}
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                          borderRadius: '6px'
+                        }}
+                      />
+                    ) : (
+                      <div style={{ textAlign: 'center', color: '#7f8c8d', padding: '20px' }}>
+                        <div style={{ fontSize: '24px', marginBottom: '8px' }}>🧱</div>
+                        <div style={{ fontSize: '14px', fontWeight: '600' }}>{selectedMaterial?.brand || 'Materiale'}</div>
+                        <div style={{ fontSize: '12px', marginTop: '4px' }}>Nessuna immagine</div>
+                      </div>
+                    )
+                  })()
+                ) : (
+                  <div style={{ textAlign: 'center', color: '#7f8c8d' }}>
+                    <div style={{ fontSize: '32px', marginBottom: '8px' }}>🧱</div>
+                    <div style={{ fontSize: '14px', fontWeight: '600' }}>Seleziona un materiale</div>
+                  </div>
+                )}
+              </div>
+            </div>
+            <form onSubmit={handleCreateProduct}>
+              <div className="form-group" style={{ position: 'relative' }}>
+                <label>Modello</label>
+                <div style={{ position: 'relative' }}>
+                  <div
+                    onClick={() => {
+                      setShowModelDropdown(!showModelDropdown)
+                      setShowMaterialDropdown(false)
+                      if (!showModelDropdown) {
+                        setModelSearch('')
+                      }
+                    }}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid #ced4da',
+                      borderRadius: '4px',
+                      background: 'white',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <span style={{ color: formData.model_id ? '#1a1a1a' : '#6c757d' }}>
+                      {formData.model_id
+                        ? models.find((m) => m.id === formData.model_id)?.name || 'Seleziona modello...'
+                        : 'Seleziona modello...'}
+                    </span>
+                    <span style={{ color: '#6c757d' }}>▼</span>
+                  </div>
+                  {showModelDropdown && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        right: 0,
+                        zIndex: 1000,
+                        marginTop: '4px',
+                        background: 'white',
+                        border: '1px solid #ddd',
+                        borderRadius: '8px',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                        maxHeight: '400px',
+                        display: 'flex',
+                        flexDirection: 'column'
+                      }}
+                    >
+                      <div style={{ padding: '10px', borderBottom: '1px solid #f0f0f0' }}>
+                        <input
+                          type="text"
+                          placeholder="Cerca modello..."
+                          value={modelSearch}
+                          onChange={(e) => {
+                            setModelSearch(e.target.value)
+                            setHoveredModel(null)
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            width: '100%',
+                            padding: '8px 12px',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px',
+                            fontSize: '14px'
+                          }}
+                          autoFocus
+                        />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', maxHeight: '300px', display: 'flex' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          {models
+                            .filter((model) => {
+                              if (!modelSearch) return true
+                              const search = modelSearch.toLowerCase()
+                              return (
+                                model.name.toLowerCase().includes(search) ||
+                                model.sku?.toLowerCase().includes(search) ||
+                                model.description?.toLowerCase().includes(search)
+                              )
+                            })
+                            .map((model) => (
+                              <div
+                                key={model.id}
+                                onClick={() => {
+                                  setFormData({ ...formData, model_id: model.id, material_id: '' })
+                                  setMultimaterialMapping({
+                                    color1: '',
+                                    color2: '',
+                                    color3: '',
+                                    color4: '',
+                                  })
+                                  setShowModelDropdown(false)
+                                  setHoveredModel(null)
+                                  setModelSearch('')
+                                }}
+                                onMouseEnter={() => setHoveredModel(model)}
+                                onMouseLeave={() => setHoveredModel(null)}
+                                style={{
+                                  padding: '10px 12px',
+                                  cursor: 'pointer',
+                                  background: formData.model_id === model.id ? '#e8f4f8' : 'white',
+                                  borderBottom: '1px solid #f0f0f0',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '10px'
+                                }}
+                              >
+                                {model.photo_url && (
+                                  <img
+                                    src={model.photo_url}
+                                    alt={model.name}
+                                    style={{
+                                      width: '40px',
+                                      height: '40px',
+                                      objectFit: 'cover',
+                                      borderRadius: '4px',
+                                      flexShrink: 0
+                                    }}
+                                  />
+                                )}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontWeight: '600', color: '#1a1a1a' }}>{model.name}</div>
+                                  <div style={{ fontSize: '12px', color: '#7f8c8d' }}>
+                                    {Math.round(parseFloat(model.weight_kg) * 1000)} g
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                        {hoveredModel && hoveredModel.photo_url && (
+                          <div
+                            style={{
+                              width: '250px',
+                              padding: '15px',
+                              borderLeft: '1px solid #f0f0f0',
+                              background: '#f8f9fa',
+                              position: 'sticky',
+                              top: 0,
+                              alignSelf: 'flex-start'
+                            }}
+                            onMouseEnter={() => setHoveredModel(hoveredModel)}
+                            onMouseLeave={() => setHoveredModel(null)}
+                          >
+                            <img
+                              src={hoveredModel.photo_url}
+                              alt={hoveredModel.name}
+                              style={{
+                                width: '100%',
+                                aspectRatio: '1',
+                                objectFit: 'cover',
+                                borderRadius: '8px',
+                                marginBottom: '10px'
+                              }}
+                            />
+                            <div style={{ fontSize: '16px', fontWeight: '600', color: '#1a1a1a', marginBottom: '4px' }}>
+                              {hoveredModel.name}
+                            </div>
+                            <div style={{ fontSize: '12px', color: '#7f8c8d' }}>
+                              Peso: {Math.round(parseFloat(hoveredModel.weight_kg) * 1000)} g
+                            </div>
+                            {hoveredModel.dimensions && (
+                              <div style={{ fontSize: '12px', color: '#7f8c8d', marginTop: '4px' }}>
+                                {hoveredModel.dimensions} {!hoveredModel.dimensions.includes('cm') && 'cm'}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              {selectedModel?.is_multimaterial ? (
+                <div className="form-group">
+                  <label>Materiali per Colore</label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginTop: '10px' }}>
+                    {[
+                      { key: 'color1', label: 'Colore 1', required: true, weight: selectedModel.color1_weight_g },
+                      { key: 'color2', label: 'Colore 2', required: true, weight: selectedModel.color2_weight_g },
+                      ...(selectedModel.color3_weight_g ? [{ key: 'color3', label: 'Colore 3', required: false, weight: selectedModel.color3_weight_g }] : []),
+                      ...(selectedModel.color4_weight_g ? [{ key: 'color4', label: 'Colore 4', required: false, weight: selectedModel.color4_weight_g }] : []),
+                    ].map(({ key, label, required, weight }) => (
+                      <div key={key} style={{ position: 'relative' }}>
+                        <label style={{ fontSize: '13px', fontWeight: '500', marginBottom: '5px', display: 'block' }}>
+                          {label} {weight && `(${weight}g)`} {required && '*'}
+                        </label>
+                        <div
+                          onClick={() => {
+                            setShowMaterialDropdown(showMaterialDropdown === key ? false : key)
+                            setShowModelDropdown(false)
+                            if (showMaterialDropdown !== key) {
+                              setMaterialSearch('')
+                            }
+                          }}
+                          style={{
+                            padding: '10px 12px',
+                            border: '1px solid #ced4da',
+                            borderRadius: '4px',
+                            background: 'white',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <span style={{ color: multimaterialMapping[key] ? '#1a1a1a' : '#6c757d', fontSize: '14px' }}>
+                            {multimaterialMapping[key]
+                              ? (() => {
+                                  const material = materials.find((m) => m.id === multimaterialMapping[key])
+                                  return material
+                                    ? `${material.brand} - ${material.material_type} - ${material.color}`
+                                    : 'Seleziona materiale...'
+                                })()
+                              : 'Seleziona materiale...'}
+                          </span>
+                          <span style={{ color: '#6c757d' }}>▼</span>
+                        </div>
+                        {multimaterialMapping[key] && (
+                          <div className="form-group" style={{ marginTop: '10px' }}>
+                            <label style={{ fontSize: '13px', fontWeight: '500', marginBottom: '5px', display: 'block' }}>
+                              Bobina per {label}
+                            </label>
+                            {multimaterialAvailableSpools[key]?.length === 0 ? (
+                              <div style={{ padding: '10px', background: '#fff3cd', borderRadius: '4px', color: '#856404', fontSize: '14px' }}>
+                                Nessuna bobina disponibile per questo materiale.
+                              </div>
+                            ) : (
+                              <select
+                                value={multimaterialSpools[key] || ''}
+                                onChange={(e) => setMultimaterialSpools({ ...multimaterialSpools, [key]: e.target.value })}
+                                required
+                                style={{
+                                  width: '100%',
+                                  padding: '10px 12px',
+                                  border: '1px solid #ced4da',
+                                  borderRadius: '4px',
+                                  background: 'white',
+                                  fontSize: '14px'
+                                }}
+                              >
+                                <option value="">Seleziona una bobina...</option>
+                                {multimaterialAvailableSpools[key]?.map((spool) => {
+                                  const pricePerKg = parseFloat(spool.price || 0)
+                                  return (
+                                    <option key={spool.id} value={spool.id}>
+                                      {spool.purchase_account} - €{pricePerKg.toFixed(2)}/kg - {parseFloat(spool.remaining_grams).toFixed(2)}g residui
+                                    </option>
+                                  )
+                                })}
+                              </select>
+                            )}
+                          </div>
+                        )}
+                        {showMaterialDropdown === key && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: '100%',
+                              left: 0,
+                              right: 0,
+                              zIndex: 1000,
+                              marginTop: '4px',
+                              background: 'white',
+                              border: '1px solid #ddd',
+                              borderRadius: '8px',
+                              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                              maxHeight: '300px',
+                              overflowY: 'auto'
+                            }}
+                          >
+                            <div style={{ padding: '10px', borderBottom: '1px solid #f0f0f0' }}>
+                              <input
+                                type="text"
+                                placeholder="Cerca materiale..."
+                                value={materialSearch}
+                                onChange={(e) => setMaterialSearch(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                style={{
+                                  width: '100%',
+                                  padding: '8px 12px',
+                                  border: '1px solid #ddd',
+                                  borderRadius: '4px',
+                                  fontSize: '14px'
+                                }}
+                                autoFocus
+                              />
+                            </div>
+                            <div>
+                              {materials
+                                .filter((material) => {
+                                  const materialSpools = spools.filter(
+                                    spool => spool.material_id === material.id && parseFloat(spool.remaining_grams) > 0
+                                  )
+                                  return materialSpools.length > 0
+                                })
+                                .filter((material) => {
+                                  if (!materialSearch) return true
+                                  const search = materialSearch.toLowerCase()
+                                  return (
+                                    material.brand.toLowerCase().includes(search) ||
+                                    material.material_type.toLowerCase().includes(search) ||
+                                    material.color.toLowerCase().includes(search) ||
+                                    material.code?.toLowerCase().includes(search)
+                                  )
+                                })
+                                .map((material) => (
+                                  <div
+                                    key={material.id}
+                                    onClick={() => {
+                                      setMultimaterialMapping({ ...multimaterialMapping, [key]: material.id })
+                                      setMultimaterialSpools({ ...multimaterialSpools, [key]: '' })
+                                      setShowMaterialDropdown(false)
+                                      setMaterialSearch('')
+                                    }}
+                                    style={{
+                                      padding: '10px 12px',
+                                      cursor: 'pointer',
+                                      background: multimaterialMapping[key] === material.id ? '#e8f4f8' : 'white',
+                                      borderBottom: '1px solid #f0f0f0',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '10px'
+                                    }}
+                                  >
+                                    {material.bobina_photo_url && (
+                                      <img
+                                        src={material.bobina_photo_url}
+                                        alt={material.brand}
+                                        style={{
+                                          width: '30px',
+                                          height: '30px',
+                                          objectFit: 'cover',
+                                          borderRadius: '4px',
+                                          flexShrink: 0
+                                        }}
+                                      />
+                                    )}
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={{ fontWeight: '600', color: '#1a1a1a', fontSize: '14px' }}>{material.brand}</div>
+                                      <div style={{ fontSize: '12px', color: '#7f8c8d', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        {material.material_type} -{' '}
+                                        {material.color_hex && (
+                                          <span
+                                            style={{
+                                              display: 'inline-block',
+                                              width: '10px',
+                                              height: '10px',
+                                              borderRadius: '50%',
+                                              backgroundColor: material.color_hex,
+                                              border: '1px solid #ddd',
+                                              flexShrink: 0
+                                            }}
+                                          />
+                                        )}
+                                        {material.color}{material.cost_per_kg ? ` - €${parseFloat(material.cost_per_kg).toFixed(2)}/kg` : ''}
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <small>Seleziona un materiale per ogni colore utilizzato nel modello</small>
+                </div>
+              ) : (
+                <div className="form-group" style={{ position: 'relative' }}>
+                  <label>Materiale</label>
+                  <div style={{ position: 'relative' }}>
+                    <div
+                      onClick={() => {
+                        setShowMaterialDropdown(showMaterialDropdown === true ? false : true)
+                        setShowModelDropdown(false)
+                        if (showMaterialDropdown !== true) {
+                          setMaterialSearch('')
+                        }
+                      }}
+                      style={{
+                        padding: '10px 12px',
+                        border: '1px solid #ced4da',
+                        borderRadius: '4px',
+                        background: 'white',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <span style={{ color: formData.material_id ? '#1a1a1a' : '#6c757d' }}>
+                        {formData.material_id
+                          ? (() => {
+                              const material = materials.find((m) => m.id === formData.material_id)
+                              return material
+                                ? `${material.brand} - ${material.material_type} - ${material.color}`
+                                : 'Seleziona materiale...'
+                            })()
+                          : 'Seleziona materiale...'}
+                      </span>
+                      <span style={{ color: '#6c757d' }}>▼</span>
+                    </div>
+                    {showMaterialDropdown === true && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        right: 0,
+                        zIndex: 1000,
+                        marginTop: '4px',
+                        background: 'white',
+                        border: '1px solid #ddd',
+                        borderRadius: '8px',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                        maxHeight: '400px',
+                        display: 'flex',
+                        flexDirection: 'column'
+                      }}
+                    >
+                      <div style={{ padding: '10px', borderBottom: '1px solid #f0f0f0' }}>
+                        <input
+                          type="text"
+                          placeholder="Cerca materiale..."
+                          value={materialSearch}
+                          onChange={(e) => {
+                            setMaterialSearch(e.target.value)
+                            setHoveredMaterial(null)
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            width: '100%',
+                            padding: '8px 12px',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px',
+                            fontSize: '14px'
+                          }}
+                          autoFocus
+                        />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', maxHeight: '300px', display: 'flex' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          {materials
+                            .filter((material) => {
+                              const materialSpools = spools.filter(
+                                spool => spool.material_id === material.id && parseFloat(spool.remaining_grams) > 0
+                              )
+                              return materialSpools.length > 0
+                            })
+                            .filter((material) => {
+                              if (!materialSearch) return true
+                              const search = materialSearch.toLowerCase()
+                              return (
+                                material.brand.toLowerCase().includes(search) ||
+                                material.material_type.toLowerCase().includes(search) ||
+                                material.color.toLowerCase().includes(search) ||
+                                material.code?.toLowerCase().includes(search)
+                              )
+                            })
+                            .map((material) => (
+                              <div
+                                key={material.id}
+                                onClick={() => {
+                                  setFormData({ ...formData, material_id: material.id })
+                                  setShowMaterialDropdown(false)
+                                  setHoveredMaterial(null)
+                                  setMaterialSearch('')
+                                }}
+                                onMouseEnter={() => setHoveredMaterial(material)}
+                                onMouseLeave={() => setHoveredMaterial(null)}
+                                style={{
+                                  padding: '10px 12px',
+                                  cursor: 'pointer',
+                                  background: formData.material_id === material.id ? '#e8f4f8' : 'white',
+                                  borderBottom: '1px solid #f0f0f0',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '10px'
+                                }}
+                              >
+                                {material.bobina_photo_url && (
+                                  <img
+                                    src={material.bobina_photo_url}
+                                    alt={material.brand}
+                                    style={{
+                                      width: '40px',
+                                      height: '40px',
+                                      objectFit: 'cover',
+                                      borderRadius: '4px',
+                                      flexShrink: 0
+                                    }}
+                                  />
+                                )}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontWeight: '600', color: '#1a1a1a' }}>{material.brand}</div>
+                                  <div style={{ fontSize: '12px', color: '#7f8c8d', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    {material.material_type} -{' '}
+                                    {material.color_hex && (
+                                      <span
+                                        style={{
+                                          display: 'inline-block',
+                                          width: '12px',
+                                          height: '12px',
+                                          borderRadius: '50%',
+                                          backgroundColor: material.color_hex,
+                                          border: '1px solid #ddd',
+                                          flexShrink: 0
+                                        }}
+                                      />
+                                    )}
+                                    {material.color} - €{parseFloat(material.cost_per_kg).toFixed(2)}/kg
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                        {hoveredMaterial && hoveredMaterial.bobina_photo_url && (
+                          <div
+                            style={{
+                              width: '250px',
+                              padding: '15px',
+                              borderLeft: '1px solid #f0f0f0',
+                              background: '#f8f9fa',
+                              position: 'sticky',
+                              top: 0,
+                              alignSelf: 'flex-start'
+                            }}
+                            onMouseEnter={() => setHoveredMaterial(hoveredMaterial)}
+                            onMouseLeave={() => setHoveredMaterial(null)}
+                          >
+                            <img
+                              src={hoveredMaterial.bobina_photo_url}
+                              alt={hoveredMaterial.brand}
+                              style={{
+                                width: '100%',
+                                aspectRatio: '1',
+                                objectFit: 'cover',
+                                borderRadius: '8px',
+                                marginBottom: '10px'
+                              }}
+                            />
+                            <div style={{ fontSize: '16px', fontWeight: '600', color: '#1a1a1a', marginBottom: '4px' }}>
+                              {hoveredMaterial.brand}
+                            </div>
+                            <div style={{ fontSize: '12px', color: '#7f8c8d', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                              {hoveredMaterial.material_type} -{' '}
+                              {hoveredMaterial.color_hex && (
+                                <span
+                                  style={{
+                                    display: 'inline-block',
+                                    width: '16px',
+                                    height: '16px',
+                                    borderRadius: '50%',
+                                    backgroundColor: hoveredMaterial.color_hex,
+                                    border: '1px solid #ddd',
+                                    flexShrink: 0
+                                  }}
+                                />
+                              )}
+                              {hoveredMaterial.color}
+                            </div>
+                            <div style={{ fontSize: '12px', color: '#7f8c8d' }}>
+                              {hoveredMaterial.cost_per_kg ? `€${parseFloat(hoveredMaterial.cost_per_kg).toFixed(2)}/kg` : 'N/A'}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {materials.filter((m) => {
+                  const materialSpools = spools.filter(
+                    spool => spool.material_id === m.id && parseFloat(spool.remaining_grams) > 0
+                  )
+                  return materialSpools.length > 0
+                }).length === 0 && (
+                  <small style={{ color: '#e74c3c', display: 'block', marginTop: '8px' }}>
+                    Nessun materiale disponibile. Aggiungi bobine con grammi disponibili nella pagina Materiali.
+                  </small>
+                )}
+              </div>
+              )}
+              {formData.material_id && !selectedModel?.is_multimaterial && (
+                <div className="form-group">
+                  <label>Bobina</label>
+                  {availableSpools.length === 0 ? (
+                    <div style={{ padding: '10px', background: '#fff3cd', borderRadius: '4px', color: '#856404', fontSize: '14px' }}>
+                      Nessuna bobina disponibile per questo materiale. Crea una bobina nella pagina Materiali.
+                    </div>
+                  ) : (
+                    <select
+                      value={formData.spool_id}
+                      onChange={(e) => setFormData({ ...formData, spool_id: e.target.value })}
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        border: '1px solid #ced4da',
+                        borderRadius: '4px',
+                        background: 'white',
+                        fontSize: '14px'
+                      }}
+                    >
+                      <option value="">Seleziona una bobina...</option>
+                      {availableSpools.map((spool) => {
+                        const pricePerKg = parseFloat(spool.price || 0)
+                        return (
+                          <option key={spool.id} value={spool.id}>
+                            {spool.purchase_account} - €{pricePerKg.toFixed(2)}/kg - {parseFloat(spool.remaining_grams).toFixed(2)}g residui
+                          </option>
+                        )
+                      })}
+                    </select>
+                  )}
+                  {formData.spool_id && selectedModel && (
+                    <small style={{ display: 'block', marginTop: '5px', color: '#666' }}>
+                      Peso prodotto: {(parseFloat(selectedModel.weight_kg) * 1000).toFixed(2)}g
+                      {(() => {
+                        const selectedSpool = availableSpools.find(s => s.id === formData.spool_id)
+                        if (selectedSpool) {
+                          const weightGrams = parseFloat(selectedModel.weight_kg) * 1000
+                          const remaining = parseFloat(selectedSpool.remaining_grams)
+                          const after = remaining - weightGrams
+                          return ` | Residuo dopo: ${after.toFixed(2)}g`
+                        }
+                        return ''
+                      })()}
+                    </small>
+                  )}
+                </div>
+              )}
+              {formData.model_id && (
+                (selectedModel?.is_multimaterial 
+                  ? (multimaterialMapping.color1 && multimaterialMapping.color2)
+                  : formData.material_id && formData.spool_id
+                ) && (() => {
+                  const productionCost = selectedModel?.is_multimaterial
+                    ? parseFloat(calculateProductionCost(formData.model_id, null, multimaterialMapping, multimaterialSpools))
+                    : (() => {
+                        const spool = spools.find((s) => s.id === formData.spool_id)
+                        if (spool && selectedModel) {
+                          return parseFloat(selectedModel.weight_kg) * parseFloat(spool.price || 0)
+                        }
+                        return 0
+                      })()
+                  
+                  return (
+                    <div className="cost-preview">
+                      <div style={{ marginBottom: '15px' }}>
+                        <strong>Costo di produzione calcolato: €{productionCost.toFixed(2)}</strong>
+                      </div>
+                      <div style={{ 
+                        display: 'flex', 
+                        flexDirection: 'column', 
+                        gap: '10px',
+                        padding: '15px',
+                        background: '#f8f9fa',
+                        borderRadius: '6px',
+                        border: '1px solid #e9ecef'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ color: '#7f8c8d', fontSize: '14px' }}>Prezzo minimo (2.5x):</span>
+                          <strong style={{ color: '#e74c3c', fontSize: '16px' }}>
+                            €{(productionCost * 2.5).toFixed(2)}
+                          </strong>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ color: '#7f8c8d', fontSize: '14px' }}>Prezzo consigliato (8x):</span>
+                          <strong style={{ color: '#27ae60', fontSize: '16px' }}>
+                            €{(productionCost * 8).toFixed(2)}
+                          </strong>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })()
+              )}
+              <div className="form-group">
+                <label>Prezzo di Vendita (€)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.sale_price}
+                  onChange={(e) => setFormData({ ...formData, sale_price: e.target.value })}
+                  required
+                  placeholder="0.00"
+                />
+                <small>I costi di imballaggio e amministrativi verranno calcolati in base al canale di vendita configurato nelle Impostazioni</small>
+                {formData.model_id && (() => {
+                  // Trova tutti i prodotti con lo stesso modello (esclusi quelli in coda)
+                  const sameModelProducts = products.filter(p => 
+                    p.model_id === formData.model_id && 
+                    p.status !== 'in_coda'
+                  )
+                  
+                  if (sameModelProducts.length === 0) {
+                    return null
+                  }
+                  
+                  // Raggruppa per stato e calcola statistiche
+                  const availableProducts = sameModelProducts.filter(p => p.status === 'disponibile')
+                  const soldProducts = sameModelProducts.filter(p => p.status === 'venduto')
+                  
+                  const availablePrices = availableProducts.map(p => parseFloat(p.sale_price || 0))
+                  const soldPrices = soldProducts.map(p => parseFloat(p.sale_price || 0))
+                  
+                  const avgAvailable = availablePrices.length > 0 
+                    ? availablePrices.reduce((a, b) => a + b, 0) / availablePrices.length 
+                    : null
+                  const avgSold = soldPrices.length > 0 
+                    ? soldPrices.reduce((a, b) => a + b, 0) / soldPrices.length 
+                    : null
+                  const minPrice = sameModelProducts.length > 0
+                    ? Math.min(...sameModelProducts.map(p => parseFloat(p.sale_price || 0)))
+                    : null
+                  const maxPrice = sameModelProducts.length > 0
+                    ? Math.max(...sameModelProducts.map(p => parseFloat(p.sale_price || 0)))
+                    : null
+                  
+                  return (
+                    <div style={{
+                      marginTop: '12px',
+                      padding: '12px',
+                      background: '#f8f9fa',
+                      borderRadius: '8px',
+                      border: '1px solid #e0e0e0'
+                    }}>
+                      <div style={{ 
+                        fontSize: '13px', 
+                        fontWeight: '600', 
+                        color: '#1a1a1a', 
+                        marginBottom: '8px' 
+                      }}>
+                        Prezzi altri prodotti di questo modello:
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
+                        {availableProducts.length > 0 && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#27ae60' }}>
+                            <span>Disponibili ({availableProducts.length}):</span>
+                            <span style={{ fontWeight: '600' }}>
+                              {avgAvailable !== null ? `Media: €${avgAvailable.toFixed(2)}` : 'N/A'}
+                            </span>
+                          </div>
+                        )}
+                        {soldProducts.length > 0 && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#3498db' }}>
+                            <span>Venduti ({soldProducts.length}):</span>
+                            <span style={{ fontWeight: '600' }}>
+                              {avgSold !== null ? `Media: €${avgSold.toFixed(2)}` : 'N/A'}
+                            </span>
+                          </div>
+                        )}
+                        {minPrice !== null && maxPrice !== null && (
+                          <div style={{ 
+                            display: 'flex', 
+                            justifyContent: 'space-between', 
+                            color: '#7f8c8d',
+                            marginTop: '4px',
+                            paddingTop: '6px',
+                            borderTop: '1px solid #e0e0e0'
+                          }}>
+                            <span>Range:</span>
+                            <span style={{ fontWeight: '600' }}>
+                              €{minPrice.toFixed(2)} - €{maxPrice.toFixed(2)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()}
+              </div>
+              <div className="modal-actions">
+                <button type="button" className="btn-secondary" onClick={() => { setShowModal(false); resetForm() }}>
+                  Annulla
+                </button>
+                <button type="submit" className="btn-primary">
+                  Crea
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

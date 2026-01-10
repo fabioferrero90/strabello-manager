@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import Materials from './pages/Materials'
 import Models from './pages/Models'
 import Products from './pages/Products'
+import PrintQueue from './pages/PrintQueue'
 import Reports from './pages/Reports'
 import Settings from './pages/Settings'
 import Logs from './pages/Logs'
@@ -55,6 +56,7 @@ function App() {
                   <Route path="/materials" element={<Materials />} />
                   <Route path="/models" element={<Models />} />
                   <Route path="/products" element={<Products />} />
+                  <Route path="/print-queue" element={<PrintQueue />} />
                   <Route path="/reports" element={<Reports />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/logs" element={<Logs />} />
