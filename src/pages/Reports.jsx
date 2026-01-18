@@ -36,6 +36,9 @@ export default function Reports() {
   const [selectedSale, setSelectedSale] = useState(null)
   const [showSaleDetailModal, setShowSaleDetailModal] = useState(false)
   const [vatRegimes, setVatRegimes] = useState([])
+  const [salesPerPage, setSalesPerPage] = useState(25)
+  const [salesPage, setSalesPage] = useState(1)
+  const [salesSortBy, setSalesSortBy] = useState('date_desc')
 
   useEffect(() => {
     loadReports()
@@ -67,6 +70,10 @@ export default function Reports() {
       setChartData([])
     }
   }, [filteredSales])
+
+  useEffect(() => {
+    setSalesPage(1)
+  }, [filteredSales, salesPerPage, salesSortBy])
 
   const loadReports = async () => {
     const { data: salesData, error } = await supabase
@@ -240,6 +247,48 @@ export default function Reports() {
     })
   }
 
+  const getSortedSales = () => {
+    const sorted = [...filteredSales]
+    sorted.sort((a, b) => {
+      const dateA = new Date(a.sold_at || 0)
+      const dateB = new Date(b.sold_at || 0)
+      const revenueA = parseFloat(a.revenue || 0)
+      const revenueB = parseFloat(b.revenue || 0)
+      const totalCostA = parseFloat(a.total_costs || 0) * (a.quantity_sold || 1)
+      const totalCostB = parseFloat(b.total_costs || 0) * (b.quantity_sold || 1)
+      const profitA = parseFloat(a.profit || 0)
+      const profitB = parseFloat(b.profit || 0)
+      const modelA = (a.model_name || '').toLowerCase()
+      const modelB = (b.model_name || '').toLowerCase()
+
+      switch (salesSortBy) {
+        case 'date_asc':
+          return dateA - dateB
+        case 'date_desc':
+          return dateB - dateA
+        case 'price_asc':
+          return revenueA - revenueB
+        case 'price_desc':
+          return revenueB - revenueA
+        case 'model_asc':
+          return modelA.localeCompare(modelB)
+        case 'model_desc':
+          return modelB.localeCompare(modelA)
+        case 'cost_asc':
+          return totalCostA - totalCostB
+        case 'cost_desc':
+          return totalCostB - totalCostA
+        case 'profit_asc':
+          return profitA - profitB
+        case 'profit_desc':
+          return profitB - profitA
+        default:
+          return dateB - dateA
+      }
+    })
+    return sorted
+  }
+
   const getChannels = () => {
     return [...new Set(filteredSales.map(s => s.sales_channel))].filter(Boolean)
   }
@@ -247,6 +296,10 @@ export default function Reports() {
   if (loading) return <div className="loading">Caricamento...</div>
 
   const channels = getChannels()
+  const sortedSales = getSortedSales()
+  const totalPages = Math.max(1, Math.ceil(sortedSales.length / salesPerPage))
+  const safePage = Math.min(salesPage, totalPages)
+  const paginatedSales = sortedSales.slice((safePage - 1) * salesPerPage, safePage * salesPerPage)
 
   return (
     <div className="reports-page">
@@ -429,6 +482,53 @@ export default function Reports() {
       {/* Lista Vendite */}
       <div className="sales-list">
         <h2>Vendite Effettuate ({filteredSales.length})</h2>
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '12px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <label style={{ fontSize: '13px', color: '#2c3e50', fontWeight: 600 }}>Vendite per pagina</label>
+            <select
+              value={salesPerPage}
+              onChange={(e) => setSalesPerPage(parseInt(e.target.value, 10))}
+              style={{
+                padding: '8px 10px',
+                borderRadius: '6px',
+                border: '1px solid #ced4da',
+                background: 'white',
+                fontSize: '13px'
+              }}
+            >
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={250}>250</option>
+            </select>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <label style={{ fontSize: '13px', color: '#2c3e50', fontWeight: 600 }}>Ordina per</label>
+            <select
+              value={salesSortBy}
+              onChange={(e) => setSalesSortBy(e.target.value)}
+              style={{
+                padding: '8px 10px',
+                borderRadius: '6px',
+                border: '1px solid #ced4da',
+                background: 'white',
+                fontSize: '13px',
+                minWidth: '220px'
+              }}
+            >
+              <option value="date_desc">Data vendita (più recenti)</option>
+              <option value="date_asc">Data vendita (più vecchie)</option>
+              <option value="price_desc">Prezzo vendita (alto → basso)</option>
+              <option value="price_asc">Prezzo vendita (basso → alto)</option>
+              <option value="model_asc">Modello (A → Z)</option>
+              <option value="model_desc">Modello (Z → A)</option>
+              <option value="cost_desc">Costo (alto → basso)</option>
+              <option value="cost_asc">Costo (basso → alto)</option>
+              <option value="profit_desc">Profitto (alto → basso)</option>
+              <option value="profit_asc">Profitto (basso → alto)</option>
+            </select>
+          </div>
+        </div>
         <div className="sales-table-container">
           <table className="sales-table">
             <thead>
@@ -437,7 +537,6 @@ export default function Reports() {
                 <th>Canale</th>
                 <th>Modello</th>
                 <th>Materiale</th>
-                <th>Quantità</th>
                 <th>Prezzo Vendita</th>
                 <th>Costo Totale</th>
                 <th>Regime IVA</th>
@@ -445,14 +544,14 @@ export default function Reports() {
               </tr>
             </thead>
             <tbody>
-              {filteredSales.length === 0 ? (
+              {sortedSales.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="empty-state">
+                  <td colSpan="8" className="empty-state">
                     Nessuna vendita registrata per il periodo selezionato
                   </td>
                 </tr>
               ) : (
-                filteredSales.map((sale) => {
+                paginatedSales.map((sale) => {
                   const revenue = parseFloat(sale.revenue || 0)
                   const totalCost = parseFloat(sale.total_costs || 0) * (sale.quantity_sold || 1)
                   const profit = parseFloat(sale.profit || 0)
@@ -508,7 +607,6 @@ export default function Reports() {
                           </span>
                         </div>
                       </td>
-                      <td>{sale.quantity_sold || 1}</td>
                       <td>€{revenue.toFixed(2)}</td>
                       <td>€{totalCost.toFixed(2)}</td>
                       <td>
@@ -536,6 +634,29 @@ export default function Reports() {
             </tbody>
           </table>
         </div>
+        {sortedSales.length > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+            <div style={{ fontSize: '13px', color: '#7f8c8d' }}>
+              Pagina {safePage} di {totalPages}
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                className="btn-secondary"
+                onClick={() => setSalesPage((prev) => Math.max(1, prev - 1))}
+                disabled={safePage <= 1}
+              >
+                Precedente
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => setSalesPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={safePage >= totalPages}
+              >
+                Successiva
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Modale Dettaglio Vendita */}

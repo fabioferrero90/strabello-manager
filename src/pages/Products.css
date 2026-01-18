@@ -32,6 +32,26 @@
   background: #1a1a1a;
 }
 
+.btn-secondary {
+  background: #f1f3f5;
+  color: #1a1a1a;
+  border: 1px solid #d0d5da;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-secondary:hover {
+  background: #e9ecef;
+}
+
+.btn-secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .products-table-container {
   background: white;
   border-radius: 12px;
@@ -81,11 +101,17 @@
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .status-queue {
   background: #fff3cd;
   color: #856404;
+}
+
+.status-printing {
+  background: #e3f2fd;
+  color: #0b5394;
 }
 
 .status-available {
@@ -123,6 +149,91 @@
 
 .btn-status:hover {
   background: #229954;
+}
+
+.btn-printing {
+  background: #3498db;
+  color: white;
+  border: none;
+  padding: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-printing:hover {
+  background: #2e86c1;
+}
+
+.btn-queue {
+  background: #f39c12;
+  color: white;
+  border: none;
+  padding: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-queue:hover {
+  background: #d68910;
+}
+
+.btn-move {
+  background: #6c757d;
+  color: white;
+  border: none;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.2s;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.drag-handle {
+  background: transparent;
+  border: none;
+  color: #7f8c8d;
+  cursor: grab;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.drag-handle:disabled {
+  cursor: not-allowed;
+  color: #cfd4d8;
+}
+
+.btn-move:hover {
+  background: #5a6268;
+}
+
+.btn-move:disabled {
+  background: #cfd4d8;
+  cursor: not-allowed;
 }
 
 .btn-delete {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faCog, faSave, faPlus, faEdit, faTrash, faTimes } from '@fortawesome/free-solid-svg-icons'
+import { faCog, faSave, faPlus, faEdit, faTrash, faTimes, faChevronDown, faChevronUp } from '@fortawesome/free-solid-svg-icons'
 import ReactCountryFlag from 'react-country-flag'
 import './Settings.css'
 
@@ -33,6 +33,10 @@ export default function Settings() {
   const [message, setMessage] = useState({ type: '', text: '' })
   const [editingVatRegime, setEditingVatRegime] = useState(null)
   const [showVatRegimeModal, setShowVatRegimeModal] = useState(false)
+  const [collapsedSections, setCollapsedSections] = useState({
+    channels: true,
+    vat: true
+  })
   const [vatRegimeForm, setVatRegimeForm] = useState({
     name: '',
     vat_rate: '',
@@ -60,12 +64,18 @@ export default function Settings() {
         const settingsMap = {}
         CHANNELS.forEach((channel) => {
           const existing = data?.find((s) => s.channel_name === channel)
-          settingsMap[channel] = existing || {
+          const baseDefaults = {
             channel_name: channel,
             promotion_cost_per_product: 0,
+            promotion_cost_type: 'fixed',
+            promotion_cost_percent: 0,
+            promotion_cost_percent_base: 'gross',
             packaging_cost: 0,
             administrative_base_cost: 0,
           }
+          settingsMap[channel] = existing
+            ? { ...baseDefaults, ...existing, channel_name: channel }
+            : baseDefaults
         })
         setSettings(settingsMap)
       }
@@ -78,11 +88,17 @@ export default function Settings() {
   }
 
   const handleInputChange = (channel, field, value) => {
+    const numericFields = [
+      'promotion_cost_per_product',
+      'promotion_cost_percent',
+      'packaging_cost',
+      'administrative_base_cost'
+    ]
     setSettings((prev) => ({
       ...prev,
       [channel]: {
         ...prev[channel],
-        [field]: parseFloat(value) || 0,
+        [field]: numericFields.includes(field) ? (parseFloat(value) || 0) : value,
       },
     }))
   }
@@ -95,7 +111,16 @@ export default function Settings() {
       const settingsArray = Object.values(settings)
 
       for (const setting of settingsArray) {
-        const { id, channel_name, promotion_cost_per_product, packaging_cost, administrative_base_cost } = setting
+        const {
+          id,
+          channel_name,
+          promotion_cost_per_product,
+          promotion_cost_type,
+          promotion_cost_percent,
+          promotion_cost_percent_base,
+          packaging_cost,
+          administrative_base_cost
+        } = setting
 
         if (id) {
           // Aggiorna esistente
@@ -103,6 +128,9 @@ export default function Settings() {
             .from('sales_channels_settings')
             .update({
               promotion_cost_per_product,
+              promotion_cost_type,
+              promotion_cost_percent,
+              promotion_cost_percent_base,
               packaging_cost,
               administrative_base_cost,
             })
@@ -116,6 +144,9 @@ export default function Settings() {
             .insert({
               channel_name,
               promotion_cost_per_product,
+              promotion_cost_type,
+              promotion_cost_percent,
+              promotion_cost_percent_base,
               packaging_cost,
               administrative_base_cost,
             })
@@ -240,6 +271,13 @@ export default function Settings() {
     }
   }
 
+  const toggleSection = (sectionKey) => {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [sectionKey]: !prev[sectionKey]
+    }))
+  }
+
   const handleDeleteVatRegime = async (id) => {
     if (!confirm('Sei sicuro di voler eliminare questo regime IVA?')) {
       return
@@ -287,213 +325,282 @@ export default function Settings() {
       )}
 
       <div className="settings-container">
-        <div className="settings-section">
-          <h2>Costi Standard per Canale di Vendita</h2>
-          <p className="section-description">
-            Configura i costi standard per ogni canale di vendita. Questi valori verranno utilizzati per calcolare i costi totali dei prodotti.
-          </p>
+        <div className={`settings-section${collapsedSections.channels ? ' collapsed' : ''}`}>
+          <div
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+            onClick={() => toggleSection('channels')}
+          >
+            <div>
+              <h2 style={{ marginBottom: '6px' }}>Costi per Canale di Vendita</h2>
+              <p className="section-description">
+                Configura i costi standard per ogni canale di vendita. Questi valori verranno utilizzati per calcolare i costi totali dei prodotti.
+              </p>
+            </div>
+            <FontAwesomeIcon icon={collapsedSections.channels ? faChevronDown : faChevronUp} />
+          </div>
 
-          <div className="channels-grid">
-            {CHANNELS.map((channel) => {
-              const channelSettings = settings[channel] || {}
-              return (
-                <div key={channel} className="channel-card">
-                  <div className="channel-header">
-                    {getChannelLogo(channel) ? (
-                      <div className="channel-logo-container">
-                        <img 
-                          src={getChannelLogo(channel)} 
-                          alt={channel}
-                          className="channel-logo"
-                          onError={(e) => {
-                            // Fallback al testo se il logo non carica
-                            const container = e.target.parentElement
-                            e.target.style.display = 'none'
-                            const fallback = document.createElement('h3')
-                            fallback.textContent = channel
-                            fallback.className = 'channel-fallback'
-                            container.appendChild(fallback)
-                          }}
-                        />
+          {!collapsedSections.channels && (
+            <>
+              <div className="channels-grid">
+                {CHANNELS.map((channel) => {
+                  const channelSettings = settings[channel] || {}
+                  return (
+                    <div key={channel} className="channel-card">
+                      <div className="channel-header">
+                        {getChannelLogo(channel) ? (
+                          <div className="channel-logo-container">
+                            <img 
+                              src={getChannelLogo(channel)} 
+                              alt={channel}
+                              className="channel-logo"
+                              onError={(e) => {
+                                // Fallback al testo se il logo non carica
+                                const container = e.target.parentElement
+                                e.target.style.display = 'none'
+                                const fallback = document.createElement('h3')
+                                fallback.textContent = channel
+                                fallback.className = 'channel-fallback'
+                                container.appendChild(fallback)
+                              }}
+                            />
+                          </div>
+                        ) : (
+                          <h3>{channel}</h3>
+                        )}
                       </div>
-                    ) : (
-                      <h3>{channel}</h3>
-                    )}
-                  </div>
-                  <div className="channel-fields">
-                    <div className="form-group">
-                      <label>Costo Sponsorizzazione per Prodotto (€)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={channelSettings.promotion_cost_per_product || 0}
-                        onChange={(e) =>
-                          handleInputChange(channel, 'promotion_cost_per_product', e.target.value)
-                        }
-                        placeholder="0.00"
-                      />
-                      <small>Costo medio di sponsorizzazione per prodotto su questo canale</small>
-                    </div>
+                      <div className="channel-fields">
+                        <div className="form-group">
+                          <label>Tipo Costo Sponsorizzazione</label>
+                          <select
+                            value={channelSettings.promotion_cost_type || 'fixed'}
+                            onChange={(e) =>
+                              handleInputChange(channel, 'promotion_cost_type', e.target.value)
+                            }
+                          >
+                            <option value="fixed">Valore fisso per prodotto</option>
+                            <option value="percent">Percentuale sul prezzo</option>
+                          </select>
+                          <small>Definisci se il costo è fisso o percentuale</small>
+                        </div>
 
-                    <div className="form-group">
-                      <label>Costo Imballaggio (€)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={channelSettings.packaging_cost || 0}
-                        onChange={(e) => handleInputChange(channel, 'packaging_cost', e.target.value)}
-                        placeholder="0.00"
-                      />
-                      <small>Costo standard di imballaggio per questo canale</small>
-                    </div>
+                        {(channelSettings.promotion_cost_type || 'fixed') === 'fixed' ? (
+                          <div className="form-group">
+                            <label>Costo Sponsorizzazione per Prodotto (€)</label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={channelSettings.promotion_cost_per_product || 0}
+                              onChange={(e) =>
+                                handleInputChange(channel, 'promotion_cost_per_product', e.target.value)
+                              }
+                              placeholder="0.00"
+                            />
+                            <small>Costo medio di sponsorizzazione per prodotto su questo canale</small>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="form-group">
+                              <label>Percentuale Sponsorizzazione (%)</label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={channelSettings.promotion_cost_percent || 0}
+                                onChange={(e) =>
+                                  handleInputChange(channel, 'promotion_cost_percent', e.target.value)
+                                }
+                                placeholder="0.00"
+                              />
+                              <small>Percentuale applicata al prezzo del prodotto</small>
+                            </div>
+                            <div className="form-group">
+                              <label>Base di Calcolo</label>
+                              <select
+                                value={channelSettings.promotion_cost_percent_base || 'gross'}
+                                onChange={(e) =>
+                                  handleInputChange(channel, 'promotion_cost_percent_base', e.target.value)
+                                }
+                              >
+                                <option value="gross">Prezzo IVATO</option>
+                                <option value="net">Prezzo IVA esclusa</option>
+                              </select>
+                              <small>Seleziona la base su cui calcolare la percentuale</small>
+                            </div>
+                          </>
+                        )}
 
-                    <div className="form-group">
-                      <label>Costo Amministrativo Base (€)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={channelSettings.administrative_base_cost || 0}
-                        onChange={(e) =>
-                          handleInputChange(channel, 'administrative_base_cost', e.target.value)
-                        }
-                        placeholder="0.00"
-                      />
-                      <small>Costo amministrativo base per questo canale</small>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+                        <div className="form-group">
+                          <label>Costo Imballaggio (€)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={channelSettings.packaging_cost || 0}
+                            onChange={(e) => handleInputChange(channel, 'packaging_cost', e.target.value)}
+                            placeholder="0.00"
+                          />
+                          <small>Costo standard di imballaggio per questo canale</small>
+                        </div>
 
-          <div className="settings-actions">
-            <button className="btn-primary" onClick={handleSave} disabled={saving}>
-              <FontAwesomeIcon icon={faSave} style={{ marginRight: '8px' }} />
-              {saving ? 'Salvataggio...' : 'Salva Impostazioni'}
-            </button>
-          </div>
+                        <div className="form-group">
+                          <label>Costo Amministrativo Base (€)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={channelSettings.administrative_base_cost || 0}
+                            onChange={(e) =>
+                              handleInputChange(channel, 'administrative_base_cost', e.target.value)
+                            }
+                            placeholder="0.00"
+                          />
+                          <small>Costo amministrativo base per questo canale</small>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="settings-actions">
+                <button className="btn-primary" onClick={handleSave} disabled={saving}>
+                  <FontAwesomeIcon icon={faSave} style={{ marginRight: '8px' }} />
+                  {saving ? 'Salvataggio...' : 'Salva Impostazioni'}
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
-        <div className="settings-section" style={{ marginTop: '40px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <div className={`settings-section${collapsedSections.vat ? ' collapsed' : ''}`}>
+          <div
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+            onClick={() => toggleSection('vat')}
+          >
             <div>
-              <h2>Regimi IVA</h2>
+              <h2 style={{ marginBottom: '6px' }}>Regimi IVA</h2>
               <p className="section-description">
                 Gestisci i regimi IVA disponibili per le vendite. Puoi aggiungere, modificare ed eliminare regimi IVA.
               </p>
             </div>
-            <button 
-              className="btn-primary" 
-              onClick={() => handleOpenVatRegimeModal()}
-              style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-            >
-              <FontAwesomeIcon icon={faPlus} />
-              Aggiungi Regime IVA
-            </button>
+            <FontAwesomeIcon icon={collapsedSections.vat ? faChevronDown : faChevronUp} />
           </div>
 
-          <div style={{ 
-            background: 'white',
-            borderRadius: '12px',
-            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
-            overflow: 'hidden',
-            marginTop: '20px'
-          }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: '#f5f5f5', borderBottom: '2px solid #e0e0e0' }}>
-                  <th style={{ padding: '15px', textAlign: 'left', fontWeight: '600', fontSize: '14px' }}>Bandiera</th>
-                  <th style={{ padding: '15px', textAlign: 'left', fontWeight: '600', fontSize: '14px' }}>Nome</th>
-                  <th style={{ padding: '15px', textAlign: 'left', fontWeight: '600', fontSize: '14px' }}>IVA</th>
-                  <th style={{ padding: '15px', textAlign: 'left', fontWeight: '600', fontSize: '14px' }}>Paesi</th>
-                  <th style={{ padding: '15px', textAlign: 'right', fontWeight: '600', fontSize: '14px' }}>Azioni</th>
-                </tr>
-              </thead>
-              <tbody>
-                {vatRegimes.map((regime, index) => (
-                  <tr 
-                    key={regime.id}
-                    style={{ 
-                      borderBottom: index < vatRegimes.length - 1 ? '1px solid #e0e0e0' : 'none'
-                    }}
-                  >
-                    <td style={{ padding: '15px' }}>
-                      {regime.country_code ? (
-                        <ReactCountryFlag
-                          countryCode={regime.country_code}
-                          svg
-                          style={{
-                            width: '32px',
-                            height: '24px'
-                          }}
-                        />
-                      ) : (
-                        <span style={{ fontSize: '24px' }}>📋</span>
-                      )}
-                    </td>
-                    <td style={{ padding: '15px', fontWeight: '500' }}>
-                      {regime.name}
-                    </td>
-                    <td style={{ padding: '15px', color: '#666' }}>
-                      {regime.vat_rate}%
-                    </td>
-                    <td style={{ padding: '15px', color: '#888', fontSize: '14px' }}>
-                      {regime.countries || '-'}
-                    </td>
-                    <td style={{ padding: '15px', textAlign: 'right' }}>
-                      <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                        <button
-                          onClick={() => handleOpenVatRegimeModal(regime)}
-                          style={{
-                            background: '#2d2d2d',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '6px',
-                            padding: '6px 12px',
-                            cursor: 'pointer',
-                            fontSize: '12px'
-                          }}
-                          title="Modifica"
-                        >
-                          <FontAwesomeIcon icon={faEdit} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteVatRegime(regime.id)}
-                          style={{
-                            background: '#dc3545',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '6px',
-                            padding: '6px 12px',
-                            cursor: 'pointer',
-                            fontSize: '12px'
-                          }}
-                          title="Elimina"
-                        >
-                          <FontAwesomeIcon icon={faTrash} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {!collapsedSections.vat && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+                <button 
+                  className="btn-primary" 
+                  onClick={() => handleOpenVatRegimeModal()}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                >
+                  <FontAwesomeIcon icon={faPlus} />
+                  Aggiungi Regime IVA
+                </button>
+              </div>
 
-          {vatRegimes.length === 0 && (
-            <div style={{ 
-              textAlign: 'center', 
-              padding: '40px', 
-              color: '#888',
-              background: 'white',
-              borderRadius: '12px',
-              marginTop: '20px'
-            }}>
-              Nessun regime IVA configurato. Clicca su "Aggiungi Regime IVA" per iniziare.
-            </div>
+              <div style={{ 
+                background: 'white',
+                borderRadius: '12px',
+                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+                overflow: 'hidden',
+                marginTop: '20px'
+              }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#f5f5f5', borderBottom: '2px solid #e0e0e0' }}>
+                      <th style={{ padding: '15px', textAlign: 'left', fontWeight: '600', fontSize: '14px' }}>Bandiera</th>
+                      <th style={{ padding: '15px', textAlign: 'left', fontWeight: '600', fontSize: '14px' }}>Nome</th>
+                      <th style={{ padding: '15px', textAlign: 'left', fontWeight: '600', fontSize: '14px' }}>IVA</th>
+                      <th style={{ padding: '15px', textAlign: 'left', fontWeight: '600', fontSize: '14px' }}>Paesi</th>
+                      <th style={{ padding: '15px', textAlign: 'right', fontWeight: '600', fontSize: '14px' }}>Azioni</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {vatRegimes.map((regime, index) => (
+                      <tr 
+                        key={regime.id}
+                        style={{ 
+                          borderBottom: index < vatRegimes.length - 1 ? '1px solid #e0e0e0' : 'none'
+                        }}
+                      >
+                        <td style={{ padding: '15px' }}>
+                          {regime.country_code ? (
+                            <ReactCountryFlag
+                              countryCode={regime.country_code}
+                              svg
+                              style={{
+                                width: '32px',
+                                height: '24px'
+                              }}
+                            />
+                          ) : (
+                            <span style={{ fontSize: '24px' }}>📋</span>
+                          )}
+                        </td>
+                        <td style={{ padding: '15px', fontWeight: '500' }}>
+                          {regime.name}
+                        </td>
+                        <td style={{ padding: '15px', color: '#666' }}>
+                          {regime.vat_rate}%
+                        </td>
+                        <td style={{ padding: '15px', color: '#888', fontSize: '14px' }}>
+                          {regime.countries || '-'}
+                        </td>
+                        <td style={{ padding: '15px', textAlign: 'right' }}>
+                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                            <button
+                              onClick={() => handleOpenVatRegimeModal(regime)}
+                              style={{
+                                background: '#2d2d2d',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '6px',
+                                padding: '6px 12px',
+                                cursor: 'pointer',
+                                fontSize: '12px'
+                              }}
+                              title="Modifica"
+                            >
+                              <FontAwesomeIcon icon={faEdit} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteVatRegime(regime.id)}
+                              style={{
+                                background: '#dc3545',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '6px',
+                                padding: '6px 12px',
+                                cursor: 'pointer',
+                                fontSize: '12px'
+                              }}
+                              title="Elimina"
+                            >
+                              <FontAwesomeIcon icon={faTrash} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {vatRegimes.length === 0 && (
+                <div style={{ 
+                  textAlign: 'center', 
+                  padding: '40px', 
+                  color: '#888',
+                  background: 'white',
+                  borderRadius: '12px',
+                  marginTop: '20px'
+                }}>
+                  Nessun regime IVA configurato. Clicca su "Aggiungi Regime IVA" per iniziare.
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

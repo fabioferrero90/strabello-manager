@@ -18,6 +18,8 @@ export default function Products() {
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [sortBy, setSortBy] = useState('created_at')
+  const [productsPerPage, setProductsPerPage] = useState(50)
+  const [productsPage, setProductsPage] = useState(1)
   const [statusFilter, setStatusFilter] = useState('disponibile') // 'tutti', 'disponibile', 'venduto'
   const [showModal, setShowModal] = useState(false)
   const [showSaleModal, setShowSaleModal] = useState(false)
@@ -208,8 +210,8 @@ export default function Products() {
   }, [editFormData.material_id, editingProduct, spools, models])
 
   const applySearchFilter = (productsList, query, sortValue, statusValue = 'tutti') => {
-    // Escludi prodotti con stato "in_coda" dalla pagina Prodotti
-    let filtered = productsList.filter(product => product.status !== 'in_coda')
+    // Escludi prodotti con stato "in_coda" o "in_stampa" dalla pagina Prodotti
+    let filtered = productsList.filter(product => !['in_coda', 'in_stampa'].includes(product.status))
     
     // Filtro per status
     if (statusValue === 'disponibile') {
@@ -274,6 +276,10 @@ export default function Products() {
   useEffect(() => {
     applySearchFilter(products, searchQuery, sortBy, statusFilter)
   }, [searchQuery, sortBy, products, statusFilter])
+
+  useEffect(() => {
+    setProductsPage(1)
+  }, [filteredProducts, productsPerPage])
 
   // Reset multimaterial mapping quando cambia il modello selezionato
   useEffect(() => {
@@ -804,7 +810,9 @@ export default function Products() {
       // Recupera i costi del canale (o usa 0 se non configurati)
       const packagingCost = parseFloat(channelSettings?.packaging_cost || 0)
       const administrativeCost = parseFloat(channelSettings?.administrative_base_cost || 0)
-      const promotionCost = parseFloat(channelSettings?.promotion_cost_per_product || 0)
+      const promotionCostType = channelSettings?.promotion_cost_type || 'fixed'
+      const promotionCostPercent = parseFloat(channelSettings?.promotion_cost_percent || 0)
+      const promotionCostPercentBase = channelSettings?.promotion_cost_percent_base || 'gross'
 
       // Calcola i costi extra della vendita
       const extraCosts = saleFormData.extra_costs || []
@@ -812,14 +820,27 @@ export default function Products() {
 
       // Calcola i totali
       const salePrice = parseFloat(saleFormData.final_sale_price)
-      // totalCosts è il costo per singolo prodotto
-      const totalCostsPerProduct = totalProductionCost + packagingCost + administrativeCost + promotionCost + extraCostsTotal
       // revenue è il ricavo totale per la vendita (prezzo * quantità)
       const revenue = salePrice * quantitySold
       
       // Calcola l'IVA da versare (assumendo che il prezzo includa già l'IVA)
       // Formula: IVA = revenue * (vat_rate / (100 + vat_rate))
       const vatAmount = vatRate > 0 ? revenue * (vatRate / (100 + vatRate)) : 0
+
+      // Calcola il costo sponsorizzazione (fisso o percentuale)
+      const vatAmountPerProduct = vatRate > 0 ? salePrice * (vatRate / (100 + vatRate)) : 0
+      const promotionBasePrice = promotionCostPercentBase === 'net'
+        ? (salePrice - vatAmountPerProduct)
+        : salePrice
+      const rawPromotionCost = promotionCostType === 'percent'
+        ? (promotionBasePrice * (promotionCostPercent / 100))
+        : parseFloat(channelSettings?.promotion_cost_per_product || 0)
+      const promotionCost = isNaN(rawPromotionCost) || rawPromotionCost < 0
+        ? 0
+        : parseFloat(rawPromotionCost.toFixed(2))
+
+      // totalCosts è il costo per singolo prodotto
+      const totalCostsPerProduct = totalProductionCost + packagingCost + administrativeCost + promotionCost + extraCostsTotal
       
       // profit è il profitto totale (ricavo - costi totali - IVA da versare)
       const profit = revenue - (totalCostsPerProduct * quantitySold) - vatAmount
@@ -1717,6 +1738,12 @@ export default function Products() {
   if (loading) return <div className="loading">Caricamento...</div>
 
   const selectedModel = models.find((m) => m.id === formData.model_id)
+  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / productsPerPage))
+  const safePage = Math.min(productsPage, totalPages)
+  const paginatedProducts = filteredProducts.slice(
+    (safePage - 1) * productsPerPage,
+    safePage * productsPerPage
+  )
   const productionCost = selectedModel?.is_multimaterial 
     ? calculateProductionCost(formData.model_id, null, multimaterialMapping)
     : calculateProductionCost(formData.model_id, formData.material_id)
@@ -1827,7 +1854,29 @@ export default function Products() {
               </button>
             </div>
           </div>
-          <div className="form-group" style={{ marginBottom: 0, flex: '0 0 300px', display: 'flex', flexDirection: 'column' }}>
+          <div className="form-group" style={{ marginBottom: 0, flex: '0 0 200px', display: 'flex', flexDirection: 'column' }}>
+            <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
+              Prodotti per pagina
+            </label>
+            <select
+              value={productsPerPage}
+              onChange={(e) => setProductsPerPage(parseInt(e.target.value, 10))}
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '2px solid #e0e0e0',
+                borderRadius: '8px',
+                fontSize: '14px',
+                background: 'white',
+                marginTop: 'auto'
+              }}
+            >
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={250}>250</option>
+            </select>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0, flex: '0 0 260px', display: 'flex', flexDirection: 'column' }}>
             <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
               Ordina per
             </label>
@@ -1859,6 +1908,29 @@ export default function Products() {
       </div>
 
       <div className="products-table-container">
+        {filteredProducts.length > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid #ecf0f1' }}>
+            <div style={{ fontSize: '13px', color: '#7f8c8d' }}>
+              Pagina {safePage} di {totalPages}
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                className="btn-secondary"
+                onClick={() => setProductsPage((prev) => Math.max(1, prev - 1))}
+                disabled={safePage <= 1}
+              >
+                Precedente
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => setProductsPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={safePage >= totalPages}
+              >
+                Successiva
+              </button>
+            </div>
+          </div>
+        )}
         <table className="products-table">
           <thead>
             <tr>
@@ -1881,7 +1953,7 @@ export default function Products() {
                 </td>
               </tr>
             ) : (
-              filteredProducts.map((product) => {
+              paginatedProducts.map((product) => {
                 const statusBadge = getStatusBadge(product.status)
                 return (
                   <tr 
@@ -2033,6 +2105,29 @@ export default function Products() {
           </tbody>
         </table>
       </div>
+      {filteredProducts.length > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+          <div style={{ fontSize: '13px', color: '#7f8c8d' }}>
+            Pagina {safePage} di {totalPages}
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              className="btn-secondary"
+              onClick={() => setProductsPage((prev) => Math.max(1, prev - 1))}
+              disabled={safePage <= 1}
+            >
+              Precedente
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => setProductsPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={safePage >= totalPages}
+            >
+              Successiva
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Modal creazione prodotto spostata in PrintQueue */}
       {false && showModal && (

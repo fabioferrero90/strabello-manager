@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { logAction } from '../lib/logging'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faCheck, faTrash, faEdit, faPlus, faTimes, faMinus } from '@fortawesome/free-solid-svg-icons'
+import { faCheck, faTrash, faEdit, faPlus, faTimes, faMinus, faPrint, faGripVertical } from '@fortawesome/free-solid-svg-icons'
 import './Products.css'
 
 export default function PrintQueue() {
@@ -14,7 +14,7 @@ export default function PrintQueue() {
   const [availableSpools, setAvailableSpools] = useState([]) // Bobine disponibili per il materiale selezionato
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
-  const [sortBy, setSortBy] = useState('created_at')
+  const [sortBy, setSortBy] = useState('priorita')
   const [showModal, setShowModal] = useState(false) // Modal per creazione prodotto
   const [showEditModal, setShowEditModal] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
@@ -31,6 +31,8 @@ export default function PrintQueue() {
   const [hoveredModel, setHoveredModel] = useState(null)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
   const [modelSearch, setModelSearch] = useState('')
+  const [dragItemId, setDragItemId] = useState(null)
+  const [dragOverId, setDragOverId] = useState(null)
   const [formData, setFormData] = useState({
     model_id: '',
     material_id: '',
@@ -224,7 +226,7 @@ export default function PrintQueue() {
         .from('products')
         .select(`
           *,
-          models(name, weight_kg, photo_url, description, dimensions, sku, is_multimaterial),
+          models(name, weight_kg, photo_url, description, dimensions, sku, is_multimaterial, color1_weight_g, color2_weight_g, color3_weight_g, color4_weight_g),
           materials(brand, material_type, color, color_hex, purchased_from, cost_per_kg, bobina_photo_url, print_example_photo_url, code, status)
         `)
         .order('created_at', { ascending: false }),
@@ -240,8 +242,8 @@ export default function PrintQueue() {
   }
 
   const applySearchFilter = (productsList, query, sortValue) => {
-    // Mostra solo prodotti con stato "in_coda"
-    let filtered = productsList.filter(product => product.status === 'in_coda')
+    // Mostra solo prodotti con stato "in_coda" o "in_stampa"
+    let filtered = productsList.filter(product => ['in_coda', 'in_stampa'].includes(product.status))
 
     // Filtro ricerca
     if (query.trim()) {
@@ -258,7 +260,14 @@ export default function PrintQueue() {
 
     // Ordinamento
     filtered.sort((a, b) => {
-      if (sortValue === 'nome_crescente') {
+      if (sortValue === 'priorita') {
+        const orderA = parseInt(a.queue_order ?? 0, 10)
+        const orderB = parseInt(b.queue_order ?? 0, 10)
+        if (orderA && orderB) return orderA - orderB
+        const dateA = new Date(a.created_at || 0)
+        const dateB = new Date(b.created_at || 0)
+        return dateA - dateB
+      } else if (sortValue === 'nome_crescente') {
         return (a.models?.name || '').localeCompare(b.models?.name || '')
       } else if (sortValue === 'nome_decrescente') {
         return (b.models?.name || '').localeCompare(a.models?.name || '')
@@ -607,6 +616,13 @@ export default function PrintQueue() {
       data: { user },
     } = await supabase.auth.getUser()
 
+    const queueProducts = products.filter(p => ['in_coda', 'in_stampa'].includes(p.status))
+    const maxQueueOrder = queueProducts.reduce((max, item) => {
+      const value = parseInt(item.queue_order ?? 0, 10)
+      return value > max ? value : max
+    }, 0)
+    const nextQueueOrder = maxQueueOrder + 1
+
     const { data, error } = await supabase.from('products').insert([
       {
         model_id: formData.model_id,
@@ -618,6 +634,7 @@ export default function PrintQueue() {
         packaging_cost: 0,
         administrative_cost: 0,
         status: 'in_coda',
+        queue_order: nextQueueOrder,
         quantity: 1, // Prodotti sempre unici
         multimaterial_mapping: mappingForDb,
         created_by: user?.id,
@@ -677,6 +694,54 @@ export default function PrintQueue() {
     } catch (error) {
       console.error('Error updating status:', error)
       alert('Errore durante l\'aggiornamento dello stato')
+    }
+  }
+
+  const handleReorderQueue = async (draggedId, targetId) => {
+    if (!draggedId || !targetId || draggedId === targetId) return
+
+    if (sortBy !== 'priorita') {
+      setSortBy('priorita')
+    }
+
+    const currentList = [...filteredProducts]
+    const fromIndex = currentList.findIndex((item) => item.id === draggedId)
+    const toIndex = currentList.findIndex((item) => item.id === targetId)
+    if (fromIndex === -1 || toIndex === -1) return
+
+    const [movedItem] = currentList.splice(fromIndex, 1)
+    currentList.splice(toIndex, 0, movedItem)
+
+    try {
+      const updates = currentList.map((item, index) => ({
+        id: item.id,
+        queue_order: index + 1
+      }))
+
+      const updateResults = await Promise.all(
+        updates.map((update) =>
+          supabase.from('products').update({ queue_order: update.queue_order }).eq('id', update.id)
+        )
+      )
+
+      const updateError = updateResults.find((result) => result.error)?.error
+      if (updateError) throw updateError
+
+      await logAction(
+        'modifica_prodotto',
+        'prodotto',
+        movedItem.id,
+        movedItem.sku || 'Prodotto sconosciuto',
+        { queue_order_reorder: { from: fromIndex + 1, to: toIndex + 1 } }
+      )
+
+      await loadData()
+    } catch (error) {
+      console.error('Error reordering queue:', error)
+      alert('Errore durante il riordino della coda')
+    } finally {
+      setDragItemId(null)
+      setDragOverId(null)
     }
   }
 
@@ -808,6 +873,7 @@ export default function PrintQueue() {
   const getStatusBadge = (status) => {
     const badges = {
       in_coda: { label: 'In Coda', class: 'status-queue' },
+      in_stampa: { label: 'In Stampa', class: 'status-printing' },
       disponibile: { label: 'Disponibile', class: 'status-available' },
       venduto: { label: 'Venduto', class: 'status-sold' },
     }
@@ -876,6 +942,7 @@ export default function PrintQueue() {
                 marginTop: 'auto'
               }}
             >
+              <option value="priorita">Priorità (Coda)</option>
               <option value="created_at">Data Caricamento (Più recenti)</option>
               <option value="nome_crescente">Nome Crescente</option>
               <option value="nome_decrescente">Nome Decrescente</option>
@@ -892,8 +959,10 @@ export default function PrintQueue() {
         <table className="products-table">
           <thead>
             <tr>
+              <th></th>
               <th>SKU</th>
               <th>Modello</th>
+              <th>Peso Modello</th>
               <th>Materiale</th>
               <th>Stato</th>
               <th>Costo Produzione</th>
@@ -904,7 +973,7 @@ export default function PrintQueue() {
           <tbody>
             {filteredProducts.length === 0 ? (
               <tr>
-                <td colSpan="7" style={{ textAlign: 'center', padding: '40px', color: '#7f8c8d' }}>
+                <td colSpan="9" style={{ textAlign: 'center', padding: '40px', color: '#7f8c8d' }}>
                   {searchQuery
                     ? 'Nessun prodotto corrisponde alla ricerca.'
                     : 'Nessun prodotto in coda di stampa.'}
@@ -914,18 +983,54 @@ export default function PrintQueue() {
               filteredProducts.map((product) => {
                 const statusBadge = getStatusBadge(product.status)
                 return (
-                  <tr 
+                  <tr
                     key={product.id}
                     className="product-row"
+                    draggable={false}
                     onClick={(e) => {
                       if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
                         return
                       }
                       handleProductClick(product)
                     }}
+                    onDragOver={(e) => {
+                      if (sortBy !== 'priorita') return
+                      e.preventDefault()
+                      setDragOverId(product.id)
+                    }}
+                    style={{
+                      ...(dragOverId === product.id ? { background: '#f1f5f9' } : {})
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      handleReorderQueue(dragItemId, product.id)
+                    }}
                   >
                     <td>
-                      <strong>{product.sku || 'N/A'}</strong>
+                      <button
+                        className="drag-handle"
+                        title="Trascina per riordinare"
+                        draggable={sortBy === 'priorita'}
+                        onClick={(e) => e.stopPropagation()}
+                        onDragStart={(e) => {
+                          e.stopPropagation()
+                          if (sortBy !== 'priorita') {
+                            setSortBy('priorita')
+                          }
+                          setDragItemId(product.id)
+                          e.dataTransfer.setData('text/plain', product.id)
+                          e.dataTransfer.effectAllowed = 'move'
+                        }}
+                        onDragEnd={() => {
+                          setDragItemId(null)
+                          setDragOverId(null)
+                        }}
+                      >
+                        <FontAwesomeIcon icon={faGripVertical} />
+                      </button>
+                    </td>
+                    <td>
+                      <strong style={{ whiteSpace: 'nowrap' }}>{product.sku || 'N/A'}</strong>
                     </td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -946,6 +1051,23 @@ export default function PrintQueue() {
                       </div>
                     </td>
                     <td>
+                      {(() => {
+                        const model = product.models
+                        if (!model) return 'N/A'
+                        const isMultimaterial = model.is_multimaterial
+                        const totalWeightGrams = isMultimaterial
+                          ? (
+                            (parseFloat(model.color1_weight_g) || 0) +
+                            (parseFloat(model.color2_weight_g) || 0) +
+                            (parseFloat(model.color3_weight_g) || 0) +
+                            (parseFloat(model.color4_weight_g) || 0)
+                          )
+                          : (parseFloat(model.weight_kg) || 0) * 1000
+
+                        return totalWeightGrams > 0 ? `${Math.round(totalWeightGrams)} g` : 'N/A'
+                      })()}
+                    </td>
+                    <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         {product.materials?.bobina_photo_url && (
                           <img
@@ -961,8 +1083,13 @@ export default function PrintQueue() {
                           />
                         )}
                         <div style={{ flex: 1 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                             <strong>{product.materials?.brand || 'N/A'}</strong>
+                            {product.materials?.material_type && (
+                              <span style={{ fontSize: '12px', color: '#7f8c8d' }}>
+                                {product.materials.material_type}
+                              </span>
+                            )}
                             {product.multimaterial_mapping && Array.isArray(product.multimaterial_mapping) && product.multimaterial_mapping.length > 1 && (
                               <span
                                 style={{
@@ -980,22 +1107,23 @@ export default function PrintQueue() {
                               </span>
                             )}
                           </div>
-                          <small style={{ color: '#7f8c8d', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            {product.materials?.material_type || ''} - 
-                            {product.materials?.color_hex && (
-                              <span
-                                style={{
-                                  display: 'inline-block',
-                                  width: '12px',
-                                  height: '12px',
-                                  borderRadius: '50%',
-                                  backgroundColor: product.materials.color_hex,
-                                  border: '1px solid #ddd'
-                                }}
-                              />
-                            )}
-                            {product.materials?.color || ''}
-                          </small>
+                          <div style={{ color: '#7f8c8d', fontSize: '12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                              {product.materials?.color_hex && (
+                                <span
+                                  style={{
+                                    display: 'inline-block',
+                                    width: '12px',
+                                    height: '12px',
+                                    borderRadius: '50%',
+                                    backgroundColor: product.materials.color_hex,
+                                    border: '1px solid #ddd'
+                                  }}
+                                />
+                              )}
+                              {product.materials?.color || ''}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </td>
@@ -1015,6 +1143,23 @@ export default function PrintQueue() {
                     <td>€{parseFloat(product.sale_price).toFixed(2)}</td>
                     <td>
                       <div className="action-buttons">
+                        {product.status === 'in_stampa' ? (
+                          <button
+                            className="btn-queue"
+                            onClick={() => handleStatusChange(product.id, 'in_coda')}
+                            title="Rimetti in coda"
+                          >
+                            <FontAwesomeIcon icon={faMinus} />
+                          </button>
+                        ) : (
+                          <button
+                            className="btn-printing"
+                            onClick={() => handleStatusChange(product.id, 'in_stampa')}
+                            title="Imposta in stampa"
+                          >
+                            <FontAwesomeIcon icon={faPrint} />
+                          </button>
+                        )}
                         <button
                           className="btn-status"
                           onClick={() => handleStatusChange(product.id, 'disponibile')}
@@ -2088,7 +2233,8 @@ export default function PrintQueue() {
                   // Trova tutti i prodotti con lo stesso modello (esclusi quelli in coda)
                   const sameModelProducts = products.filter(p => 
                     p.model_id === formData.model_id && 
-                    p.status !== 'in_coda'
+                    p.status !== 'in_coda' &&
+                    p.status !== 'in_stampa'
                   )
                   
                   if (sameModelProducts.length === 0) {

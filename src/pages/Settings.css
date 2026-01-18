@@ -20,14 +20,28 @@
 }
 
 .settings-container {
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  padding: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
 }
 
 .settings-section {
-  margin-bottom: 30px;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  padding: 24px;
+}
+
+.settings-section.collapsed {
+  padding-bottom: 25px;
+}
+
+.settings-section.collapsed h2 {
+  margin-bottom: 0;
+}
+
+.settings-section.collapsed .section-description {
+  margin-bottom: 0;
 }
 
 .settings-section h2 {
@@ -132,7 +146,17 @@
   transition: border-color 0.2s;
 }
 
-.channel-fields input:focus {
+.channel-fields select {
+  padding: 10px 12px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 14px;
+  background-color: white;
+  transition: border-color 0.2s;
+}
+
+.channel-fields input:focus,
+.channel-fields select:focus {
   outline: none;
   border-color: #2d2d2d;
   box-shadow: 0 0 0 3px rgba(45, 45, 45, 0.1);
