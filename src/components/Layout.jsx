@@ -10,7 +10,8 @@ import {
   faPrint,
   faChartBar, 
   faCog, 
-  faHistory 
+  faHistory,
+  faToolbox
 } from '@fortawesome/free-solid-svg-icons'
 import './Layout.css'
 
@@ -50,6 +51,7 @@ export default function Layout({ children }) {
   const navItems = [
     { path: '/', label: 'Dashboard', icon: faChartLine },
     { path: '/materials', label: 'Materiali', icon: faBox },
+    { path: '/accessories', label: 'Accessori', icon: faToolbox },
     { path: '/models', label: 'Modelli', icon: faCube },
     { path: '/products', label: 'Prodotti', icon: faShoppingBag },
     { path: '/print-queue', label: 'Coda di Stampa', icon: faPrint },

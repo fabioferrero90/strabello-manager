@@ -5,8 +5,8 @@ CREATE TABLE public.logs (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   user_id uuid NOT NULL,
   user_email text NOT NULL,
-  action_type text NOT NULL CHECK (action_type = ANY (ARRAY['aggiunta_materiale'::text, 'modifica_materiale'::text, 'eliminazione_materiale'::text, 'aggiunta_modello'::text, 'modifica_modello'::text, 'eliminazione_modello'::text, 'aggiunta_prodotto'::text, 'modifica_prodotto'::text, 'eliminazione_prodotto'::text])),
-  entity_type text NOT NULL CHECK (entity_type = ANY (ARRAY['materiale'::text, 'modello'::text, 'prodotto'::text])),
+  action_type text NOT NULL CHECK (action_type = ANY (ARRAY['aggiunta_materiale'::text, 'modifica_materiale'::text, 'eliminazione_materiale'::text, 'aggiunta_modello'::text, 'modifica_modello'::text, 'eliminazione_modello'::text, 'aggiunta_prodotto'::text, 'modifica_prodotto'::text, 'eliminazione_prodotto'::text, 'aggiunta_accessorio'::text, 'modifica_accessorio'::text, 'eliminazione_accessorio'::text])),
+  entity_type text NOT NULL CHECK (entity_type = ANY (ARRAY['materiale'::text, 'modello'::text, 'prodotto'::text, 'accessorio'::text])),
   entity_id uuid NOT NULL,
   entity_name text,
   details jsonb DEFAULT '{}'::jsonb,
@@ -142,6 +142,40 @@ CREATE TABLE public.spools (
   purchased_from text NOT NULL,
   CONSTRAINT spools_pkey PRIMARY KEY (id),
   CONSTRAINT spools_material_id_fkey FOREIGN KEY (material_id) REFERENCES public.materials(id)
+);
+CREATE TABLE public.accessories (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  name text NOT NULL,
+  description text,
+  photo_url text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT accessories_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.accessory_pieces (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  accessory_id uuid NOT NULL,
+  unit_cost numeric NOT NULL DEFAULT 0,
+  remaining_qty integer NOT NULL DEFAULT 0,
+  purchase_account text NOT NULL CHECK (purchase_account = ANY (ARRAY['Fabio'::text, 'Mesmerized SRLS'::text])),
+  purchased_from text,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT accessory_pieces_pkey PRIMARY KEY (id),
+  CONSTRAINT accessory_pieces_accessory_id_fkey FOREIGN KEY (accessory_id) REFERENCES public.accessories(id)
+);
+CREATE TABLE public.product_accessories (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  product_id uuid NOT NULL,
+  accessory_id uuid NOT NULL,
+  accessory_piece_id uuid,
+  quantity_used integer NOT NULL DEFAULT 1,
+  unit_cost numeric NOT NULL DEFAULT 0,
+  purchase_account text NOT NULL CHECK (purchase_account = ANY (ARRAY['Fabio'::text, 'Mesmerized SRLS'::text])),
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT product_accessories_pkey PRIMARY KEY (id),
+  CONSTRAINT product_accessories_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
+  CONSTRAINT product_accessories_accessory_id_fkey FOREIGN KEY (accessory_id) REFERENCES public.accessories(id),
+  CONSTRAINT product_accessories_accessory_piece_id_fkey FOREIGN KEY (accessory_piece_id) REFERENCES public.accessory_pieces(id)
 );
 CREATE TABLE public.vat_regimes (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),

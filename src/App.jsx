@@ -4,6 +4,7 @@ import { supabase } from './lib/supabase'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Materials from './pages/Materials'
+import Accessories from './pages/Accessories'
 import Models from './pages/Models'
 import Products from './pages/Products'
 import PrintQueue from './pages/PrintQueue'
@@ -54,6 +55,7 @@ function App() {
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/materials" element={<Materials />} />
+                  <Route path="/accessories" element={<Accessories />} />
                   <Route path="/models" element={<Models />} />
                   <Route path="/products" element={<Products />} />
                   <Route path="/print-queue" element={<PrintQueue />} />

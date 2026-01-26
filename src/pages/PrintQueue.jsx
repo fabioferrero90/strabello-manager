@@ -9,6 +9,8 @@ export default function PrintQueue() {
   const [products, setProducts] = useState([])
   const [filteredProducts, setFilteredProducts] = useState([])
   const [materials, setMaterials] = useState([])
+  const [accessories, setAccessories] = useState([])
+  const [accessoryPieces, setAccessoryPieces] = useState([])
   const [models, setModels] = useState([])
   const [spools, setSpools] = useState([])
   const [availableSpools, setAvailableSpools] = useState([]) // Bobine disponibili per il materiale selezionato
@@ -41,6 +43,7 @@ export default function PrintQueue() {
     spool_id: '',
     sale_price: '',
   })
+  const [accessoryUsages, setAccessoryUsages] = useState([])
   const [multimaterialMapping, setMultimaterialMapping] = useState({
     color1: '',
     color2: '',
@@ -221,8 +224,10 @@ export default function PrintQueue() {
   }, [editFormData.material_id, editingProduct, spools, models])
 
   const loadData = async () => {
-    const [materialsRes, modelsRes, productsRes, spoolsRes] = await Promise.all([
+    const [materialsRes, accessoriesRes, accessoryPiecesRes, modelsRes, productsRes, spoolsRes] = await Promise.all([
       supabase.from('materials').select('*').order('brand'),
+      supabase.from('accessories').select('*').order('name'),
+      supabase.from('accessory_pieces').select('*').order('created_at'),
       supabase.from('models').select('*').order('name'),
       supabase
         .from('products')
@@ -236,6 +241,8 @@ export default function PrintQueue() {
     ])
 
     setMaterials(materialsRes.data || [])
+    setAccessories(accessoriesRes.data || [])
+    setAccessoryPieces(accessoryPiecesRes.data || [])
     setModels(modelsRes.data || [])
     setProducts(productsRes.data || [])
     setSpools(spoolsRes.data || [])
@@ -375,6 +382,66 @@ export default function PrintQueue() {
     return '0.00'
   }
 
+  const calculateAccessoryCost = (usages) => {
+    const allocation = allocateAccessoryPieces(usages, accessoryPieces, true)
+    return allocation.costTotal
+  }
+
+  const getAccessoryAvailableQty = (accessoryId) => {
+    return accessoryPieces
+      .filter((piece) => piece.accessory_id === accessoryId)
+      .reduce((sum, piece) => sum + (parseInt(piece.remaining_qty, 10) || 0), 0)
+  }
+
+  const allocateAccessoryPieces = (usages, pieces, simulateOnly = false) => {
+    const updates = []
+    const rows = []
+    let costTotal = 0
+    const piecesCopy = pieces.map((piece) => ({ ...piece }))
+
+    for (const usage of usages) {
+      const qtyNeeded = parseInt(usage.quantity, 10) || 0
+      if (!usage.accessory_id || qtyNeeded <= 0) continue
+
+      const availablePieces = piecesCopy
+        .filter((piece) => piece.accessory_id === usage.accessory_id && (parseInt(piece.remaining_qty, 10) || 0) > 0)
+        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+
+      let remaining = qtyNeeded
+      for (const piece of availablePieces) {
+        if (remaining <= 0) break
+        const pieceQty = parseInt(piece.remaining_qty, 10) || 0
+        const usedQty = Math.min(pieceQty, remaining)
+        if (usedQty <= 0) continue
+
+        const oldQty = pieceQty
+        const newQty = pieceQty - usedQty
+        piece.remaining_qty = newQty
+
+        updates.push({ pieceId: piece.id, oldQty, newQty })
+        rows.push({
+          accessory_id: piece.accessory_id,
+          accessory_piece_id: piece.id,
+          quantity_used: usedQty,
+          unit_cost: parseFloat(piece.unit_cost || 0),
+          purchase_account: piece.purchase_account
+        })
+        costTotal += usedQty * parseFloat(piece.unit_cost || 0)
+        remaining -= usedQty
+      }
+
+      if (remaining > 0) {
+        return { ok: false, updates: [], rows: [], costTotal: 0 }
+      }
+    }
+
+    if (simulateOnly) {
+      return { ok: true, updates: [], rows: [], costTotal }
+    }
+
+    return { ok: true, updates, rows, costTotal }
+  }
+
   const resetForm = () => {
     setFormData({
       model_id: '',
@@ -382,6 +449,7 @@ export default function PrintQueue() {
       spool_id: '',
       sale_price: '',
     })
+    setAccessoryUsages([])
     setAvailableSpools([])
     setMultimaterialMapping({
       color1: '',
@@ -422,6 +490,8 @@ export default function PrintQueue() {
     let materialId = null
     let mappingForDb = null
     let spoolUpdates = []
+    let accessoryUpdates = []
+    let accessoryRows = []
 
     if (model.is_multimaterial) {
       // Validazione per modelli multimateriale
@@ -614,6 +684,48 @@ export default function PrintQueue() {
       setSpools(updatedSpools)
     }
 
+    // Accessori: validazione e scarico quantità
+    const cleanedAccessoryUsages = accessoryUsages
+      .filter((usage) => usage.accessory_id && parseInt(usage.quantity, 10) > 0)
+      .map((usage) => ({
+        accessory_id: usage.accessory_id,
+        quantity: parseInt(usage.quantity, 10)
+      }))
+
+    if (cleanedAccessoryUsages.length > 0) {
+      const allocation = allocateAccessoryPieces(cleanedAccessoryUsages, accessoryPieces)
+      if (!allocation.ok) {
+        alert('Quantità accessori insufficiente')
+        return
+      }
+
+      for (const update of allocation.updates) {
+        const { error: accessoryError } = await supabase
+          .from('accessory_pieces')
+          .update({ remaining_qty: update.newQty })
+          .eq('id', update.pieceId)
+
+        if (accessoryError) {
+          for (const rollback of accessoryUpdates) {
+            await supabase
+              .from('accessory_pieces')
+              .update({ remaining_qty: rollback.oldQty })
+              .eq('id', rollback.pieceId)
+          }
+          alert('Errore durante l\'aggiornamento accessorio: ' + accessoryError.message)
+          return
+        }
+
+        accessoryUpdates.push({
+          pieceId: update.pieceId,
+          oldQty: update.oldQty
+        })
+      }
+
+      accessoryRows = allocation.rows
+      productionCost += allocation.costTotal
+    }
+
     const {
       data: { user },
     } = await supabase.auth.getUser()
@@ -658,8 +770,49 @@ export default function PrintQueue() {
           .update({ remaining_grams: spoolUpdate.oldGrams })
           .eq('id', spoolUpdate.spoolId)
       }
+      for (const update of accessoryUpdates) {
+        await supabase
+          .from('accessory_pieces')
+          .update({ remaining_qty: update.oldQty })
+          .eq('id', update.pieceId)
+      }
       alert('Errore durante la creazione: ' + error.message)
     } else {
+      if (accessoryRows.length > 0) {
+        const rows = accessoryRows.map((row) => ({
+          ...row,
+          product_id: data.id
+        }))
+        const { error: accessoryInsertError } = await supabase
+          .from('product_accessories')
+          .insert(rows)
+
+        if (accessoryInsertError) {
+          for (const update of accessoryUpdates) {
+            await supabase
+              .from('accessory_pieces')
+              .update({ remaining_qty: update.oldQty })
+              .eq('id', update.pieceId)
+          }
+          if (model.is_multimaterial && spoolUpdates) {
+            for (const update of spoolUpdates) {
+              await supabase
+                .from('spools')
+                .update({ remaining_grams: update.oldGrams })
+                .eq('id', update.spoolId)
+            }
+          } else if (!model.is_multimaterial && spoolUpdate) {
+            await supabase
+              .from('spools')
+              .update({ remaining_grams: spoolUpdate.oldGrams })
+              .eq('id', spoolUpdate.spoolId)
+          }
+          await supabase.from('products').delete().eq('id', data.id)
+          alert('Errore durante il salvataggio accessori: ' + accessoryInsertError.message)
+          return
+        }
+      }
+
       // Log dell'operazione
       await logAction(
         'aggiunta_prodotto',
@@ -1511,6 +1664,64 @@ export default function PrintQueue() {
                   )}
                 </div>
               )}
+              <div className="form-group">
+                <label>Accessori usati</label>
+                {accessoryUsages.length === 0 ? (
+                  <small style={{ color: '#7f8c8d', display: 'block', marginBottom: '8px' }}>
+                    Nessun accessorio selezionato
+                  </small>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '8px' }}>
+                    {accessoryUsages.map((usage, index) => (
+                      <div key={`acc-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 120px auto', gap: '8px', alignItems: 'center' }}>
+                        <select
+                          value={usage.accessory_id}
+                          onChange={(e) => {
+                            const updated = [...accessoryUsages]
+                            updated[index] = { ...updated[index], accessory_id: e.target.value }
+                            setAccessoryUsages(updated)
+                          }}
+                        >
+                          <option value="">Seleziona accessorio</option>
+                          {accessories.map((acc) => (
+                            <option key={acc.id} value={acc.id}>
+                              {acc.name} (disp. {getAccessoryAvailableQty(acc.id)})
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          min="1"
+                          value={usage.quantity}
+                          onChange={(e) => {
+                            const updated = [...accessoryUsages]
+                            updated[index] = { ...updated[index], quantity: e.target.value }
+                            setAccessoryUsages(updated)
+                          }}
+                          placeholder="Qtà"
+                        />
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            const updated = accessoryUsages.filter((_, i) => i !== index)
+                            setAccessoryUsages(updated)
+                          }}
+                        >
+                          Rimuovi
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setAccessoryUsages([...accessoryUsages, { accessory_id: '', quantity: 1 }])}
+                >
+                  + Aggiungi accessorio
+                </button>
+              </div>
 
               <div className="modal-actions">
                 <button 
@@ -2360,12 +2571,71 @@ export default function PrintQueue() {
                   )}
                 </div>
               )}
+              <div className="form-group">
+                <label>Accessori usati</label>
+                {accessoryUsages.length === 0 ? (
+                  <small style={{ color: '#7f8c8d', display: 'block', marginBottom: '8px' }}>
+                    Nessun accessorio selezionato
+                  </small>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '8px' }}>
+                    {accessoryUsages.map((usage, index) => (
+                      <div key={`acc-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 120px auto', gap: '8px', alignItems: 'center' }}>
+                        <select
+                          value={usage.accessory_id}
+                          onChange={(e) => {
+                            const updated = [...accessoryUsages]
+                            updated[index] = { ...updated[index], accessory_id: e.target.value }
+                            setAccessoryUsages(updated)
+                          }}
+                        >
+                          <option value="">Seleziona accessorio</option>
+                          {accessories.map((acc) => (
+                            <option key={acc.id} value={acc.id}>
+                              {acc.name} (disp. {getAccessoryAvailableQty(acc.id)})
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          min="1"
+                          value={usage.quantity}
+                          onChange={(e) => {
+                            const updated = [...accessoryUsages]
+                            updated[index] = { ...updated[index], quantity: e.target.value }
+                            setAccessoryUsages(updated)
+                          }}
+                          placeholder="Qtà"
+                        />
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            const updated = accessoryUsages.filter((_, i) => i !== index)
+                            setAccessoryUsages(updated)
+                          }}
+                        >
+                          Rimuovi
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setAccessoryUsages([...accessoryUsages, { accessory_id: '', quantity: 1 }])}
+                >
+                  + Aggiungi accessorio
+                </button>
+              </div>
+
               {formData.model_id && (
                 (selectedModel?.is_multimaterial 
                   ? (multimaterialMapping.color1 && multimaterialMapping.color2)
                   : formData.material_id && formData.spool_id
                 ) && (() => {
-                  const productionCost = selectedModel?.is_multimaterial
+                  const baseCost = selectedModel?.is_multimaterial
                     ? parseFloat(calculateProductionCost(formData.model_id, null, multimaterialMapping, multimaterialSpools))
                     : (() => {
                         const spool = spools.find((s) => s.id === formData.spool_id)
@@ -2374,6 +2644,8 @@ export default function PrintQueue() {
                         }
                         return 0
                       })()
+                  const accessoryCost = calculateAccessoryCost(accessoryUsages)
+                  const productionCost = baseCost + accessoryCost
                   
                   return (
                     <div className="cost-preview">
