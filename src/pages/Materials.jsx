@@ -22,7 +22,7 @@ export default function Materials() {
     color: '',
     material_type: '',
     availability: 'tutti', // 'tutti', 'disponibile', 'esaurito'
-    sortBy: 'data_decrescente'
+    sortBy: 'quantita_disponibile'
   })
   const [showColorPicker, setShowColorPicker] = useState(false)
   const [editingMaterial, setEditingMaterial] = useState(null)
@@ -51,12 +51,15 @@ export default function Materials() {
     print_example_photo_url: '',
   })
 
+  const getTotalRemainingForMaterial = (materialId) => {
+    const materialSpools = getSpoolsForMaterial(materialId)
+    return materialSpools.reduce((sum, spool) => sum + parseFloat(spool.remaining_grams || 0), 0)
+  }
+
   // Helper per determinare se un materiale è disponibile o esaurito
   const isMaterialAvailable = (materialId) => {
-    const materialSpools = getSpoolsForMaterial(materialId)
-    if (materialSpools.length === 0) return false
-    const totalGrams = materialSpools.reduce((sum, spool) => sum + parseFloat(spool.remaining_grams || 0), 0)
-    return totalGrams > 0
+    if (getSpoolsForMaterial(materialId).length === 0) return false
+    return getTotalRemainingForMaterial(materialId) > 0
   }
 
   const applyFilters = (materialsList, filterValues) => {
@@ -90,7 +93,12 @@ export default function Materials() {
 
     // Ordinamento
     filtered.sort((a, b) => {
-      if (filterValues.sortBy === 'prezzo_crescente') {
+      if (filterValues.sortBy === 'quantita_disponibile') {
+        const totalA = getTotalRemainingForMaterial(a.id)
+        const totalB = getTotalRemainingForMaterial(b.id)
+        if (totalB !== totalA) return totalB - totalA
+        return (a.brand || '').localeCompare(b.brand || '')
+      } else if (filterValues.sortBy === 'prezzo_crescente') {
         return parseFloat(a.cost_per_kg || 0) - parseFloat(b.cost_per_kg || 0)
       } else if (filterValues.sortBy === 'prezzo_decrescente') {
         return parseFloat(b.cost_per_kg || 0) - parseFloat(a.cost_per_kg || 0)
@@ -157,7 +165,7 @@ export default function Materials() {
     if (materials.length > 0) {
       applyFilters(materials, filters)
     }
-  }, [filters, materials])
+  }, [filters, materials, spools])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -432,12 +440,15 @@ export default function Materials() {
       return
     }
 
+    const remainingGramsRaw = parseFloat(spoolFormData.remaining_grams)
+    const remainingGrams = Number.isNaN(remainingGramsRaw) ? 1000 : remainingGramsRaw
+
     if (editingSpool) {
       // Modifica bobina esistente (solo una alla volta)
       const spoolData = {
         purchase_account: spoolFormData.purchase_account,
         purchased_from: spoolFormData.purchased_from,
-        remaining_grams: parseFloat(spoolFormData.remaining_grams) || 1000,
+        remaining_grams: remainingGrams,
         price: price
       }
 
@@ -466,7 +477,7 @@ export default function Materials() {
           material_id: selectedMaterialForSpool.id,
           purchase_account: spoolFormData.purchase_account,
           purchased_from: spoolFormData.purchased_from,
-          remaining_grams: parseFloat(spoolFormData.remaining_grams) || 1000,
+          remaining_grams: remainingGrams,
           price: price
         })
       }
@@ -822,6 +833,7 @@ export default function Materials() {
                 background: 'white'
               }}
             >
+              <option value="quantita_disponibile">Quantità disponibile (più fornito)</option>
               <option value="brand">Brand</option>
               <option value="prezzo_crescente">Prezzo Crescente</option>
               <option value="prezzo_decrescente">Prezzo Decrescente</option>
@@ -856,33 +868,25 @@ export default function Materials() {
               filteredMaterials.map((material) => {
                 const materialSpools = getSpoolsForMaterial(material.id)
                 
-                // Separa bobine complete (>= 1000g) da bobine parziali (< 1000g)
-                const fullSpools = materialSpools.filter(spool => parseFloat(spool.remaining_grams || 0) >= 1000)
-                const partialSpools = materialSpools.filter(spool => parseFloat(spool.remaining_grams || 0) < 1000)
-                
-                // Conta le bobine complete
-                const fullSpoolsCount = fullSpools.length
-                
-                // La barra mostra i grammi della prima bobina parziale (se esiste), altrimenti 1000g
-                let progressBarValue
+                const totalRemaining = materialSpools.reduce(
+                  (sum, spool) => sum + parseFloat(spool.remaining_grams || 0),
+                  0
+                )
+                const fullKgs = Math.floor(totalRemaining / 1000)
+                const remainderGrams = totalRemaining % 1000
+
+                // Mostra sempre una barra con valore, a meno che il materiale sia esaurito
+                let progressBarValue = 0
                 let additionalKgs = 0
-                
-                if (partialSpools.length > 0) {
-                  // Prendi la prima bobina parziale per la barra
-                  progressBarValue = parseFloat(partialSpools[0].remaining_grams || 0)
-                  // Tutte le bobine complete vanno nel contatore "+Xkg"
-                  additionalKgs = fullSpoolsCount
-                } else if (fullSpools.length > 0) {
-                  // Se non ci sono bobine parziali, mostra 1000g (barra piena per una bobina completa)
-                  progressBarValue = 1000
-                  // Le bobine complete oltre la prima (quella mostrata nella barra) vanno nel contatore "+Xkg"
-                  // Se ho 1 bobina completa: additionalKgs = 0 (non mostro "+Xkg")
-                  // Se ho 2+ bobine complete: additionalKgs = fullSpoolsCount - 1
-                  additionalKgs = fullSpoolsCount > 1 ? fullSpoolsCount - 1 : 0
-                } else {
-                  // Nessuna bobina disponibile
-                  progressBarValue = 0
-                  additionalKgs = 0
+
+                if (totalRemaining > 0) {
+                  if (remainderGrams > 0) {
+                    progressBarValue = remainderGrams
+                    additionalKgs = fullKgs
+                  } else {
+                    progressBarValue = 1000
+                    additionalKgs = Math.max(fullKgs - 1, 0)
+                  }
                 }
                 
                 return (
@@ -1423,7 +1427,23 @@ export default function Materials() {
             {(() => {
               const materialSpools = getSpoolsForMaterial(selectedMaterialForSpools.id)
               const totalRemaining = materialSpools.reduce((sum, spool) => sum + parseFloat(spool.remaining_grams || 0), 0)
-              
+              const getRemaining = (spool) => parseFloat(spool.remaining_grams || 0)
+              const exhaustedSpools = materialSpools.filter((spool) => getRemaining(spool) <= 0)
+              const visibleSpools = materialSpools
+                .filter((spool) => getRemaining(spool) > 0)
+                .sort((a, b) => {
+                  const aRemaining = getRemaining(a)
+                  const bRemaining = getRemaining(b)
+                  const aIsPartial = aRemaining < 1000
+                  const bIsPartial = bRemaining < 1000
+
+                  if (aIsPartial !== bIsPartial) {
+                    return aIsPartial ? -1 : 1
+                  }
+
+                  return aRemaining - bRemaining
+                })
+
               return (
                 <>
                   <div style={{ marginBottom: '20px', padding: '15px', background: '#f8f9fa', borderRadius: '8px' }}>
@@ -1461,7 +1481,7 @@ export default function Materials() {
                     </button>
                   </div>
 
-                  {materialSpools.length === 0 ? (
+                  {visibleSpools.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
                       <div style={{ fontSize: '48px', marginBottom: '10px' }}>📦</div>
                       <div>Nessuna bobina disponibile per questo materiale</div>
@@ -1480,7 +1500,7 @@ export default function Materials() {
                           </tr>
                         </thead>
                         <tbody>
-                          {materialSpools.map((spool) => (
+                          {visibleSpools.map((spool) => (
                             <tr key={spool.id} style={{ borderBottom: '1px solid #e0e0e0' }}>
                               <td style={{ padding: '12px', fontSize: '14px', color: '#2d2d2d', fontWeight: '600' }}>
                                 {spool.purchase_account}
@@ -1572,6 +1592,11 @@ export default function Materials() {
                           ))}
                         </tbody>
                       </table>
+                      {exhaustedSpools.length > 0 && (
+                        <div style={{ marginTop: '10px', fontSize: '12px', color: '#999', textAlign: 'right' }}>
+                          {exhaustedSpools.length} bobine esaurite
+                        </div>
+                      )}
                     </div>
                   )}
                 </>

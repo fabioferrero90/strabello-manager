@@ -39,6 +39,7 @@ export default function Reports() {
   const [salesPerPage, setSalesPerPage] = useState(25)
   const [salesPage, setSalesPage] = useState(1)
   const [salesSortBy, setSalesSortBy] = useState('date_desc')
+  const [hoveredSaleImage, setHoveredSaleImage] = useState(null)
 
   useEffect(() => {
     loadReports()
@@ -78,7 +79,7 @@ export default function Reports() {
   const loadReports = async () => {
     const { data: salesData, error } = await supabase
       .from('sales')
-      .select('*')
+      .select('*, products(models(photo_url, name))')
       .order('sold_at', { ascending: true })
 
     if (error) {
@@ -245,6 +246,29 @@ export default function Reports() {
       hour: '2-digit',
       minute: '2-digit',
     })
+  }
+
+  const getHoverCardStyle = (rect, width = 220, offset = 8) => {
+    if (!rect) return {}
+    const safeLeft = Math.min(
+      Math.max(rect.left, offset),
+      window.innerWidth - width - offset
+    )
+    const placeAbove = rect.top > 260
+    const top = placeAbove ? rect.top - offset : rect.bottom + offset
+
+    return {
+      position: 'fixed',
+      left: safeLeft,
+      top,
+      transform: placeAbove ? 'translateY(-100%)' : 'none',
+      background: 'white',
+      border: '1px solid #e0e0e0',
+      borderRadius: '8px',
+      padding: '8px',
+      boxShadow: '0 6px 18px rgba(0, 0, 0, 0.12)',
+      zIndex: 2000
+    }
   }
 
   const getSortedSales = () => {
@@ -535,6 +559,7 @@ export default function Reports() {
               <tr>
                 <th>Data Vendita</th>
                 <th>Canale</th>
+                <th>Foto</th>
                 <th>Modello</th>
                 <th>Materiale</th>
                 <th>Prezzo Vendita</th>
@@ -546,7 +571,7 @@ export default function Reports() {
             <tbody>
               {sortedSales.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="empty-state">
+                  <td colSpan="9" className="empty-state">
                     Nessuna vendita registrata per il periodo selezionato
                   </td>
                 </tr>
@@ -555,6 +580,7 @@ export default function Reports() {
                   const revenue = parseFloat(sale.revenue || 0)
                   const totalCost = parseFloat(sale.total_costs || 0) * (sale.quantity_sold || 1)
                   const profit = parseFloat(sale.profit || 0)
+                  const photoUrl = sale.products?.models?.photo_url || null
                   
                   // Trova il regime IVA per ottenere il country_code
                   const vatRegime = vatRegimes.find(r => r.name === sale.vat_regime)
@@ -583,6 +609,51 @@ export default function Reports() {
                         >
                           {sale.sales_channel}
                         </span>
+                      </td>
+                      <td>
+                        <div
+                          style={{ position: 'relative', display: 'inline-block' }}
+                          onMouseEnter={(e) => {
+                            setHoveredSaleImage({
+                              id: sale.id,
+                              rect: e.currentTarget.getBoundingClientRect(),
+                              photoUrl
+                            })
+                          }}
+                          onMouseLeave={() => setHoveredSaleImage(null)}
+                        >
+                          {photoUrl ? (
+                            <img
+                              src={photoUrl}
+                              alt={sale.model_name || 'Prodotto'}
+                              style={{
+                                width: '40px',
+                                height: '40px',
+                                objectFit: 'cover',
+                                borderRadius: '4px',
+                                border: '1px solid #e0e0e0',
+                                display: 'block'
+                              }}
+                            />
+                          ) : (
+                            <span style={{ color: '#7f8c8d', fontSize: '12px' }}>N/A</span>
+                          )}
+                          {photoUrl && hoveredSaleImage?.id === sale.id && (
+                            <div style={getHoverCardStyle(hoveredSaleImage.rect, 220)}>
+                              <img
+                                src={photoUrl}
+                                alt={sale.model_name || 'Prodotto'}
+                                style={{
+                                  width: '200px',
+                                  height: '200px',
+                                  objectFit: 'cover',
+                                  borderRadius: '6px',
+                                  display: 'block'
+                                }}
+                              />
+                            </div>
+                          )}
+                        </div>
                       </td>
                       <td>{sale.model_name || 'N/A'}</td>
                       <td>

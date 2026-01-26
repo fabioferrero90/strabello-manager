@@ -28,6 +28,8 @@ export default function PrintQueue() {
   const [showMaterialDropdown, setShowMaterialDropdown] = useState(false)
   const [materialSearch, setMaterialSearch] = useState('')
   const [hoveredMaterial, setHoveredMaterial] = useState(null)
+  const [hoveredMaterialCard, setHoveredMaterialCard] = useState(null)
+  const [hoveredModelCard, setHoveredModelCard] = useState(null)
   const [hoveredModel, setHoveredModel] = useState(null)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
   const [modelSearch, setModelSearch] = useState('')
@@ -870,6 +872,40 @@ export default function PrintQueue() {
     })
   }
 
+  const getMultimaterialDetails = (product) => {
+    const mapping = Array.isArray(product?.multimaterial_mapping) ? product.multimaterial_mapping : []
+    if (mapping.length <= 1) return []
+
+    const sortedMapping = [...mapping].sort((a, b) => (a.color || 0) - (b.color || 0))
+    return sortedMapping.map((item) => ({
+      colorIndex: item.color,
+      material: materials.find((m) => m.id === item.material_id)
+    }))
+  }
+
+  const getHoverCardStyle = (rect, width = 240, offset = 8) => {
+    if (!rect) return {}
+    const safeLeft = Math.min(
+      Math.max(rect.left, offset),
+      window.innerWidth - width - offset
+    )
+    const placeAbove = rect.top > 260
+    const top = placeAbove ? rect.top - offset : rect.bottom + offset
+
+    return {
+      position: 'fixed',
+      left: safeLeft,
+      top,
+      transform: placeAbove ? 'translateY(-100%)' : 'none',
+      background: 'white',
+      border: '1px solid #e0e0e0',
+      borderRadius: '8px',
+      padding: '10px 12px',
+      boxShadow: '0 6px 18px rgba(0, 0, 0, 0.12)',
+      zIndex: 2000
+    }
+  }
+
   const getStatusBadge = (status) => {
     const badges = {
       in_coda: { label: 'In Coda', class: 'status-queue' },
@@ -1034,19 +1070,47 @@ export default function PrintQueue() {
                     </td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        {product.models?.photo_url && (
-                          <img
-                            src={product.models.photo_url}
-                            alt={product.models.name}
-                            style={{
-                              width: '40px',
-                              height: '40px',
-                              objectFit: 'cover',
-                              borderRadius: '4px',
-                              border: '1px solid #e0e0e0'
-                            }}
-                          />
-                        )}
+                        <div
+                          style={{ position: 'relative' }}
+                          onMouseEnter={(e) => {
+                            setHoveredModelCard({
+                              id: product.id,
+                              rect: e.currentTarget.getBoundingClientRect(),
+                              photoUrl: product.models?.photo_url,
+                              name: product.models?.name
+                            })
+                          }}
+                          onMouseLeave={() => setHoveredModelCard(null)}
+                        >
+                          {product.models?.photo_url && (
+                            <img
+                              src={product.models.photo_url}
+                              alt={product.models.name}
+                              style={{
+                                width: '40px',
+                                height: '40px',
+                                objectFit: 'cover',
+                                borderRadius: '4px',
+                                border: '1px solid #e0e0e0'
+                              }}
+                            />
+                          )}
+                          {hoveredModelCard?.id === product.id && hoveredModelCard?.photoUrl && (
+                            <div style={{ ...getHoverCardStyle(hoveredModelCard.rect, 220), padding: '8px' }}>
+                              <img
+                                src={hoveredModelCard.photoUrl}
+                                alt={hoveredModelCard.name || 'Prodotto'}
+                                style={{
+                                  width: '200px',
+                                  height: '200px',
+                                  objectFit: 'cover',
+                                  borderRadius: '6px',
+                                  display: 'block'
+                                }}
+                              />
+                            </div>
+                          )}
+                        </div>
                         <span>{product.models?.name || 'N/A'}</span>
                       </div>
                     </td>
@@ -1068,7 +1132,16 @@ export default function PrintQueue() {
                       })()}
                     </td>
                     <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div
+                        style={{ display: 'flex', alignItems: 'center', gap: '10px', position: 'relative' }}
+                        onMouseEnter={(e) => {
+                          setHoveredMaterialCard({
+                            id: product.id,
+                            rect: e.currentTarget.getBoundingClientRect()
+                          })
+                        }}
+                        onMouseLeave={() => setHoveredMaterialCard(null)}
+                      >
                         {product.materials?.bobina_photo_url && (
                           <img
                             src={product.materials.bobina_photo_url}
@@ -1101,7 +1174,6 @@ export default function PrintQueue() {
                                   fontWeight: '600',
                                   lineHeight: '1.2'
                                 }}
-                                title={`${product.multimaterial_mapping.length} materiali utilizzati`}
                               >
                                 +{product.multimaterial_mapping.length - 1}
                               </span>
@@ -1125,6 +1197,60 @@ export default function PrintQueue() {
                             </span>
                           </div>
                         </div>
+                        {(() => {
+                          const details = getMultimaterialDetails(product)
+                          if (details.length <= 1 || hoveredMaterialCard?.id !== product.id) return null
+
+                          return (
+                            <div
+                              style={{ ...getHoverCardStyle(hoveredMaterialCard?.rect, 260), minWidth: '220px' }}
+                            >
+                              <div style={{ fontSize: '12px', fontWeight: '600', color: '#1a1a1a', marginBottom: '6px' }}>
+                                Materiali usati
+                              </div>
+                              {details.map((item) => {
+                                if (!item.material) {
+                                  return (
+                                    <div key={`mm-${item.colorIndex}`} style={{ fontSize: '12px', color: '#7f8c8d', marginBottom: '4px' }}>
+                                      Colore {item.colorIndex || ''}: N/A
+                                    </div>
+                                  )
+                                }
+
+                                return (
+                                  <div key={`mm-${item.colorIndex}`} style={{ marginBottom: '6px' }}>
+                                    <div style={{ fontSize: '12px', fontWeight: '600', color: '#1a1a1a' }}>
+                                      Colore {item.colorIndex}
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#7f8c8d' }}>
+                                      <span style={{ color: '#1a1a1a' }}>{item.material.brand}</span>
+                                      {item.material.material_type && (
+                                        <span>{item.material.material_type}</span>
+                                      )}
+                                      {item.material.color && (
+                                        <>
+                                          {item.material.color_hex && (
+                                            <span
+                                              style={{
+                                                display: 'inline-block',
+                                                width: '10px',
+                                                height: '10px',
+                                                borderRadius: '50%',
+                                                backgroundColor: item.material.color_hex,
+                                                border: '1px solid #ddd'
+                                              }}
+                                            />
+                                          )}
+                                          <span>{item.material.color}</span>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )
+                        })()}
                       </div>
                     </td>
                     <td>
@@ -1424,7 +1550,70 @@ export default function PrintQueue() {
                 <strong>Modello:</strong> {detailProduct.models?.name || 'N/A'}
               </div>
               <div style={{ marginBottom: '10px' }}>
-                <strong>Materiale:</strong> {detailProduct.materials?.brand || 'N/A'} - {detailProduct.materials?.material_type || 'N/A'} - {detailProduct.materials?.color || 'N/A'}
+                {(() => {
+                  const details = getMultimaterialDetails(detailProduct)
+                  if (details.length > 1) {
+                    return (
+                      <div>
+                        <strong>Materiali:</strong>
+                        <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {details.map((item) => (
+                            <div key={`detail-mm-${item.colorIndex}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+                              <span style={{ fontWeight: 600 }}>Colore {item.colorIndex}</span>
+                              <span style={{ color: '#7f8c8d' }}>-</span>
+                              <span>{item.material?.brand || 'N/A'}</span>
+                              {item.material?.material_type && (
+                                <span style={{ color: '#7f8c8d' }}>{item.material.material_type}</span>
+                              )}
+                              {item.material?.color && (
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#7f8c8d' }}>
+                                  {item.material.color_hex && (
+                                    <span
+                                      style={{
+                                        display: 'inline-block',
+                                        width: '12px',
+                                        height: '12px',
+                                        borderRadius: '50%',
+                                        backgroundColor: item.material.color_hex,
+                                        border: '1px solid #ddd'
+                                      }}
+                                    />
+                                  )}
+                                  {item.material.color}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <strong>Materiale:</strong>
+                      <span>{detailProduct.materials?.brand || 'N/A'}</span>
+                      <span>-</span>
+                      <span>{detailProduct.materials?.material_type || 'N/A'}</span>
+                      <span>-</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#7f8c8d' }}>
+                        {detailProduct.materials?.color_hex && (
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              width: '12px',
+                              height: '12px',
+                              borderRadius: '50%',
+                              backgroundColor: detailProduct.materials.color_hex,
+                              border: '1px solid #ddd'
+                            }}
+                          />
+                        )}
+                        {detailProduct.materials?.color || 'N/A'}
+                      </span>
+                    </div>
+                  )
+                })()}
               </div>
               <div style={{ marginBottom: '10px' }}>
                 <strong>Costo Produzione:</strong> €{parseFloat(detailProduct.production_cost || 0).toFixed(2)}

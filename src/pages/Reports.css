@@ -158,6 +158,7 @@
 
 .sales-table-container {
   overflow-x: auto;
+  overflow-y: visible;
 }
 
 .sales-table {
