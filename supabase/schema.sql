@@ -52,6 +52,7 @@ CREATE TABLE public.products (
   model_id uuid NOT NULL,
   material_id uuid NOT NULL,
   status text NOT NULL CHECK (status = ANY (ARRAY['in_coda'::text, 'in_stampa'::text, 'disponibile'::text, 'venduto'::text])),
+  storage_location text CHECK (storage_location IS NULL OR (storage_location = ANY (ARRAY['Mesmerized SRLS'::text, 'Robe di Robertaebasta'::text]))),
   queue_order integer,
   sale_price numeric NOT NULL,
   final_sale_price numeric,

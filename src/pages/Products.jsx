@@ -23,11 +23,14 @@ export default function Products() {
   const [productsPerPage, setProductsPerPage] = useState(50)
   const [productsPage, setProductsPage] = useState(1)
   const [statusFilter, setStatusFilter] = useState('disponibile') // 'tutti', 'disponibile', 'venduto'
+  const [storageFilter, setStorageFilter] = useState('tutti') // 'tutti', 'Mesmerized SRLS', 'Robe di Robertaebasta'
   const [showModal, setShowModal] = useState(false)
   const [showSaleModal, setShowSaleModal] = useState(false)
   const [showDetailModal, setShowDetailModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
+  const [showEditInfoModal, setShowEditInfoModal] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
+  const [editingInfoProduct, setEditingInfoProduct] = useState(null)
   const [selectedProduct, setSelectedProduct] = useState(null)
   const [detailProduct, setDetailProduct] = useState(null)
   const [editFormData, setEditFormData] = useState({
@@ -42,6 +45,7 @@ export default function Products() {
   const [hoveredMaterial, setHoveredMaterial] = useState(null)
   const [hoveredMaterialCard, setHoveredMaterialCard] = useState(null)
   const [hoveredModelCard, setHoveredModelCard] = useState(null)
+  const [expandedModels, setExpandedModels] = useState({})
   const [showModelDropdown, setShowModelDropdown] = useState(false)
   const [showMaterialDropdown, setShowMaterialDropdown] = useState(false) // false o 'color1', 'color2', 'color3', 'color4'
   const [modelSearch, setModelSearch] = useState('')
@@ -52,6 +56,10 @@ export default function Products() {
     material_id: '',
     spool_id: '',
     sale_price: '',
+  })
+  const [editInfoForm, setEditInfoForm] = useState({
+    sale_price: '',
+    storage_location: ''
   })
   const [accessoryUsages, setAccessoryUsages] = useState([])
   const [multimaterialMapping, setMultimaterialMapping] = useState({
@@ -128,7 +136,7 @@ export default function Products() {
     setProducts(productsRes.data || [])
     setVatRegimes(vatRegimesRes.data || [])
     setSpools(spoolsRes.data || [])
-    applySearchFilter(productsRes.data || [], searchQuery, sortBy, statusFilter)
+    applySearchFilter(productsRes.data || [], searchQuery, sortBy, statusFilter, storageFilter)
     setLoading(false)
   }
 
@@ -220,7 +228,7 @@ export default function Products() {
     }
   }, [editFormData.material_id, editingProduct, spools, models])
 
-  const applySearchFilter = (productsList, query, sortValue, statusValue = 'tutti') => {
+  const applySearchFilter = (productsList, query, sortValue, statusValue = 'tutti', storageValue = 'tutti') => {
     // Escludi prodotti con stato "in_coda" o "in_stampa" dalla pagina Prodotti
     let filtered = productsList.filter(product => !['in_coda', 'in_stampa'].includes(product.status))
     
@@ -231,6 +239,11 @@ export default function Products() {
       filtered = filtered.filter(product => product.status === 'venduto')
     }
     // Se statusValue === 'tutti', non filtrare per status
+
+    // Filtro per magazzino
+    if (storageValue !== 'tutti') {
+      filtered = filtered.filter(product => product.storage_location === storageValue)
+    }
 
     // Filtro ricerca
     if (query.trim()) {
@@ -285,8 +298,24 @@ export default function Products() {
   }
 
   useEffect(() => {
-    applySearchFilter(products, searchQuery, sortBy, statusFilter)
-  }, [searchQuery, sortBy, products, statusFilter])
+    applySearchFilter(products, searchQuery, sortBy, statusFilter, storageFilter)
+  }, [searchQuery, sortBy, products, statusFilter, storageFilter])
+
+  useEffect(() => {
+    if (filteredProducts.length === 0) {
+      setExpandedModels({})
+      return
+    }
+    setExpandedModels((prev) => {
+      const next = { ...prev }
+      filteredProducts.forEach((product) => {
+        if (product.model_id && next[product.model_id] === undefined) {
+          next[product.model_id] = true
+        }
+      })
+      return next
+    })
+  }, [filteredProducts])
 
   useEffect(() => {
     setProductsPage(1)
@@ -834,6 +863,14 @@ export default function Products() {
       return
     }
     if (newStatus === 'disponibile') {
+      const choice = prompt('Seleziona il magazzino:\n- Mesmerized SRLS\n- Robe di Robertaebasta', 'Mesmerized SRLS')
+      if (!choice) return
+      const normalized = choice.trim()
+      if (!['Mesmerized SRLS', 'Robe di Robertaebasta'].includes(normalized)) {
+        alert('Magazzino non valido. Usa: Mesmerized SRLS oppure Robe di Robertaebasta')
+        return
+      }
+      updateData.storage_location = normalized
       updateData.sold_at = null
       updateData.final_sale_price = null
       updateData.vat_regime = null
@@ -1142,56 +1179,12 @@ export default function Products() {
   }
 
   const handleEditProduct = (product) => {
-    // Permetti modifica anche per prodotti multimateriale e venduti
-    const productModel = models.find(m => m.id === product.model_id)
-    const isMultimaterial = productModel?.is_multimaterial
-    const isSold = product.status === 'venduto'
-    
-    setEditingProduct(product)
-    
-    const accessoryUsagesFromProduct = (product.product_accessories || []).map((item) => ({
-      accessory_id: item.accessory_id,
-      quantity: item.quantity_used
-    }))
-    setEditAccessoryUsages(accessoryUsagesFromProduct)
-
-    if (isMultimaterial) {
-      // Per prodotti multimateriale, carica il mapping
-      const mapping = Array.isArray(product.multimaterial_mapping) 
-        ? product.multimaterial_mapping 
-        : []
-      
-      const multimaterialMapping = {}
-      const multimaterialSpoolsMapping = {}
-      
-      mapping.forEach(item => {
-        if (item.color) {
-          const colorKey = `color${item.color}`
-          multimaterialMapping[colorKey] = item.material_id || ''
-          multimaterialSpoolsMapping[colorKey] = item.spool_id || ''
-        }
-      })
-      
-      setMultimaterialMapping({
-        color1: multimaterialMapping.color1 || '',
-        color2: multimaterialMapping.color2 || '',
-        color3: multimaterialMapping.color3 || '',
-        color4: multimaterialMapping.color4 || '',
-      })
-      setMultimaterialSpools({
-        color1: multimaterialSpoolsMapping.color1 || '',
-        color2: multimaterialSpoolsMapping.color2 || '',
-        color3: multimaterialSpoolsMapping.color3 || '',
-        color4: multimaterialSpoolsMapping.color4 || '',
-      })
-    }
-    
-    setEditFormData({
-      material_id: product.material_id || '',
-      spool_id: product.spool_id || '',
+    setEditingInfoProduct(product)
+    setEditInfoForm({
+      sale_price: product?.sale_price ?? '',
+      storage_location: product?.storage_location || ''
     })
-    
-    setShowEditModal(true)
+    setShowEditInfoModal(true)
   }
 
   const handleUpdateProduct = async (e) => {
@@ -1729,10 +1722,52 @@ export default function Products() {
     }
   }
 
+  const handleUpdateProductInfo = async (e) => {
+    e.preventDefault()
+    if (!editingInfoProduct) return
+
+    const salePrice = parseFloat(editInfoForm.sale_price)
+    if (Number.isNaN(salePrice) || salePrice < 0) {
+      alert('Inserisci un prezzo valido')
+      return
+    }
+
+    const updateData = {
+      sale_price: salePrice,
+      storage_location: editInfoForm.storage_location || null
+    }
+
+    const { error } = await supabase
+      .from('products')
+      .update(updateData)
+      .eq('id', editingInfoProduct.id)
+
+    if (error) {
+      alert('Errore durante l\'aggiornamento: ' + error.message)
+      return
+    }
+
+    await logAction(
+      'modifica_prodotto',
+      'prodotto',
+      editingInfoProduct.id,
+      editingInfoProduct.sku || 'Prodotto sconosciuto',
+      { changes: updateData }
+    )
+
+    await loadData()
+    setShowEditInfoModal(false)
+    setEditingInfoProduct(null)
+  }
+
   const handleDelete = async (id) => {
     if (!confirm('Sei sicuro di voler eliminare questo prodotto?')) return
 
     const product = products.find((p) => p.id === id)
+    if (product && !['in_coda', 'in_stampa'].includes(product.status)) {
+      alert('Puoi eliminare solo prodotti in coda o in stampa.')
+      return
+    }
     const productSku = product?.sku || 'Prodotto sconosciuto'
 
     const { error } = await supabase.from('products').delete().eq('id', id)
@@ -2079,9 +2114,26 @@ export default function Products() {
   if (loading) return <div className="loading">Caricamento...</div>
 
   const selectedModel = models.find((m) => m.id === formData.model_id)
-  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / productsPerPage))
+  const groupedModels = (() => {
+    const map = new Map()
+    const order = []
+    filteredProducts.forEach((product) => {
+      const key = product.model_id || 'no-model'
+      if (!map.has(key)) {
+        map.set(key, {
+          modelId: key,
+          model: product.models || models.find((m) => m.id === product.model_id) || null,
+          products: []
+        })
+        order.push(key)
+      }
+      map.get(key).products.push(product)
+    })
+    return order.map((key) => map.get(key))
+  })()
+  const totalPages = Math.max(1, Math.ceil(groupedModels.length / productsPerPage))
   const safePage = Math.min(productsPage, totalPages)
-  const paginatedProducts = filteredProducts.slice(
+  const paginatedGroups = groupedModels.slice(
     (safePage - 1) * productsPerPage,
     safePage * productsPerPage
   )
@@ -2219,6 +2271,28 @@ export default function Products() {
               <option value={250}>250</option>
             </select>
           </div>
+          <div className="form-group" style={{ marginBottom: 0, flex: '0 0 220px', display: 'flex', flexDirection: 'column' }}>
+            <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
+              Magazzino
+            </label>
+            <select
+              value={storageFilter}
+              onChange={(e) => setStorageFilter(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '2px solid #e0e0e0',
+                borderRadius: '8px',
+                fontSize: '14px',
+                background: 'white',
+                marginTop: 'auto'
+              }}
+            >
+              <option value="tutti">Tutti</option>
+              <option value="Mesmerized SRLS">Mesmerized SRLS</option>
+              <option value="Robe di Robertaebasta">Robe di Robertaebasta</option>
+            </select>
+          </div>
           <div className="form-group" style={{ marginBottom: 0, flex: '0 0 260px', display: 'flex', flexDirection: 'column' }}>
             <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
               Ordina per
@@ -2281,6 +2355,7 @@ export default function Products() {
               <th>Modello</th>
               <th>Materiale</th>
               <th>Stato</th>
+              <th style={{ whiteSpace: 'nowrap' }}>Magazzino</th>
               <th>Costo Produzione</th>
               <th>Prezzo Vendita</th>
               <th>Azioni</th>
@@ -2289,249 +2364,285 @@ export default function Products() {
           <tbody>
             {filteredProducts.length === 0 ? (
               <tr>
-                <td colSpan="8" className="empty-state">
+                <td colSpan="7" className="empty-state">
                   {products.length === 0 
                     ? 'Nessun prodotto trovato. Crea il primo prodotto!'
                     : 'Nessun prodotto corrisponde alla ricerca.'}
                 </td>
               </tr>
             ) : (
-              paginatedProducts.map((product) => {
-                const statusBadge = getStatusBadge(product.status)
-                return (
-                  <tr 
-                    key={product.id}
-                    className="product-row"
-                    onClick={(e) => {
-                      // Non aprire il dettaglio se si clicca su un bottone
-                      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
-                        return
-                      }
-                      handleProductClick(product)
-                    }}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td>
-                      <strong style={{ fontFamily: 'monospace', color: '#1a1a1a' }}>
-                        {product.sku || 'N/A'}
-                      </strong>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <div
-                          style={{ position: 'relative' }}
-                          onMouseEnter={(e) => {
-                            setHoveredModelCard({
-                              id: product.id,
-                              rect: e.currentTarget.getBoundingClientRect(),
-                              photoUrl: product.models?.photo_url,
-                              name: product.models?.name
-                            })
-                          }}
-                          onMouseLeave={() => setHoveredModelCard(null)}
-                        >
-                          {product.models?.photo_url && (
-                            <img
-                              src={product.models.photo_url}
-                              alt={product.models.name}
-                              style={{
-                                width: '40px',
-                                height: '40px',
-                                objectFit: 'cover',
-                                borderRadius: '4px',
-                                border: '1px solid #e0e0e0'
-                              }}
-                            />
-                          )}
-                          {hoveredModelCard?.id === product.id && hoveredModelCard?.photoUrl && (
-                            <div style={{ ...getHoverCardStyle(hoveredModelCard.rect, 220), padding: '8px' }}>
-                              <img
-                                src={hoveredModelCard.photoUrl}
-                                alt={hoveredModelCard.name || 'Prodotto'}
-                                style={{
-                                  width: '200px',
-                                  height: '200px',
-                                  objectFit: 'cover',
-                                  borderRadius: '6px',
-                                  display: 'block'
-                                }}
-                              />
-                            </div>
-                          )}
-                        </div>
-                        <span>{product.models?.name || 'N/A'}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        {product.materials?.bobina_photo_url && (
-                          <img
-                            src={product.materials.bobina_photo_url}
-                            alt={product.materials.brand}
-                            style={{
-                              width: '40px',
-                              height: '40px',
-                              objectFit: 'cover',
-                              borderRadius: '4px',
-                              border: '1px solid #e0e0e0'
+              paginatedGroups.flatMap((group) => {
+                const modelId = group.modelId
+                const isExpanded = expandedModels[modelId] !== false
+                const modelName = group.model?.name || 'Modello sconosciuto'
+                const variantCount = group.products.length
+
+                const rows = [
+                  (
+                    <tr key={`group-${modelId}`} style={{ background: '#f8f9fa' }}>
+                      <td colSpan="7" style={{ padding: '12px 12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setExpandedModels((prev) => ({ ...prev, [modelId]: !isExpanded }))
                             }}
-                          />
-                        )}
-                        <div
-                          style={{ flex: 1, position: 'relative' }}
-                          onMouseEnter={(e) => {
-                            setHoveredMaterialCard({
-                              id: product.id,
-                              rect: e.currentTarget.getBoundingClientRect()
-                            })
-                          }}
-                          onMouseLeave={() => setHoveredMaterialCard(null)}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <strong>{product.materials?.brand || 'N/A'}</strong>
-                            {product.multimaterial_mapping && Array.isArray(product.multimaterial_mapping) && product.multimaterial_mapping.length > 1 && (
-                              <span
-                                style={{
-                                  padding: '2px 6px',
-                                  borderRadius: '4px',
-                                  background: '#2d2d2d',
-                                  color: 'white',
-                                  fontSize: '11px',
-                                  fontWeight: '600',
-                                  lineHeight: '1.2'
-                                }}
-                              >
-                                +{product.multimaterial_mapping.length - 1}
-                              </span>
-                            )}
+                            style={{ padding: '4px 8px' }}
+                          >
+                            {isExpanded ? '▼' : '▶'}
+                          </button>
+                          <strong>{modelName}</strong>
+                          <span style={{ marginLeft: '6px', color: '#7f8c8d' }}>
+                            {variantCount} {variantCount === 1 ? 'variante' : 'varianti'}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                ]
+
+                if (!isExpanded) {
+                  return rows
+                }
+
+                return rows.concat(
+                  group.products.map((product) => {
+                    const statusBadge = getStatusBadge(product.status)
+                    return (
+                      <tr 
+                        key={product.id}
+                        className="product-row"
+                        onClick={(e) => {
+                          if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+                            return
+                          }
+                          handleProductClick(product)
+                        }}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <td>
+                          <strong style={{ fontFamily: 'monospace', color: '#1a1a1a' }}>
+                            {product.sku || 'N/A'}
+                          </strong>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <div
+                              style={{ position: 'relative' }}
+                              onMouseEnter={(e) => {
+                                setHoveredModelCard({
+                                  id: product.id,
+                                  rect: e.currentTarget.getBoundingClientRect(),
+                                  photoUrl: product.models?.photo_url,
+                                  name: product.models?.name
+                                })
+                              }}
+                              onMouseLeave={() => setHoveredModelCard(null)}
+                            >
+                              {product.models?.photo_url && (
+                                <img
+                                  src={product.models.photo_url}
+                                  alt={product.models.name}
+                                  style={{
+                                    width: '40px',
+                                    height: '40px',
+                                    objectFit: 'cover',
+                                    borderRadius: '4px',
+                                    border: '1px solid #e0e0e0'
+                                  }}
+                                />
+                              )}
+                              {hoveredModelCard?.id === product.id && hoveredModelCard?.photoUrl && (
+                                <div style={{ ...getHoverCardStyle(hoveredModelCard.rect, 220), padding: '8px' }}>
+                                  <img
+                                    src={hoveredModelCard.photoUrl}
+                                    alt={hoveredModelCard.name || 'Prodotto'}
+                                    style={{
+                                      width: '200px',
+                                      height: '200px',
+                                      objectFit: 'cover',
+                                      borderRadius: '6px',
+                                      display: 'block'
+                                    }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                            <span>{product.models?.name || 'N/A'}</span>
                           </div>
-                          <small style={{ color: '#7f8c8d', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            {product.materials?.material_type || ''} - 
-                            {product.materials?.color_hex && (
-                              <span
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            {product.materials?.bobina_photo_url && (
+                              <img
+                                src={product.materials.bobina_photo_url}
+                                alt={product.materials.brand}
                                 style={{
-                                  display: 'inline-block',
-                                  width: '12px',
-                                  height: '12px',
-                                  borderRadius: '50%',
-                                  backgroundColor: product.materials.color_hex,
-                                  border: '1px solid #ddd'
+                                  width: '40px',
+                                  height: '40px',
+                                  objectFit: 'cover',
+                                  borderRadius: '4px',
+                                  border: '1px solid #e0e0e0'
                                 }}
                               />
                             )}
-                            {product.materials?.color || ''}
-                          </small>
-                          {(() => {
-                            const details = getMultimaterialDetails(product)
-                            if (details.length <= 1 || hoveredMaterialCard?.id !== product.id) return null
-
-                            return (
-                              <div
-                                style={{ ...getHoverCardStyle(hoveredMaterialCard?.rect, 260), minWidth: '220px' }}
-                              >
-                                <div style={{ fontSize: '12px', fontWeight: '600', color: '#1a1a1a', marginBottom: '6px' }}>
-                                  Materiali usati
-                                </div>
-                                {details.map((item) => {
-                                  if (!item.material) {
-                                    return (
-                                      <div key={`mm-${item.colorIndex}`} style={{ fontSize: '12px', color: '#7f8c8d', marginBottom: '4px' }}>
-                                        Colore {item.colorIndex || ''}: N/A
-                                      </div>
-                                    )
-                                  }
-
-                                  return (
-                                    <div key={`mm-${item.colorIndex}`} style={{ marginBottom: '6px' }}>
-                                      <div style={{ fontSize: '12px', fontWeight: '600', color: '#1a1a1a' }}>
-                                        Colore {item.colorIndex}
-                                      </div>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#7f8c8d' }}>
-                                        <span style={{ color: '#1a1a1a' }}>{item.material.brand}</span>
-                                        {item.material.material_type && (
-                                          <span>{item.material.material_type}</span>
-                                        )}
-                                        {item.material.color && (
-                                          <>
-                                            {item.material.color_hex && (
-                                              <span
-                                                style={{
-                                                  display: 'inline-block',
-                                                  width: '10px',
-                                                  height: '10px',
-                                                  borderRadius: '50%',
-                                                  backgroundColor: item.material.color_hex,
-                                                  border: '1px solid #ddd'
-                                                }}
-                                              />
-                                            )}
-                                            <span>{item.material.color}</span>
-                                          </>
-                                        )}
-                                      </div>
-                                    </div>
-                                  )
-                                })}
+                            <div
+                              style={{ flex: 1, position: 'relative' }}
+                              onMouseEnter={(e) => {
+                                setHoveredMaterialCard({
+                                  id: product.id,
+                                  rect: e.currentTarget.getBoundingClientRect()
+                                })
+                              }}
+                              onMouseLeave={() => setHoveredMaterialCard(null)}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <strong>{product.materials?.brand || 'N/A'}</strong>
+                                {product.multimaterial_mapping && Array.isArray(product.multimaterial_mapping) && product.multimaterial_mapping.length > 1 && (
+                                  <span
+                                    style={{
+                                      padding: '2px 6px',
+                                      borderRadius: '4px',
+                                      background: '#2d2d2d',
+                                      color: 'white',
+                                      fontSize: '11px',
+                                      fontWeight: '600',
+                                      lineHeight: '1.2'
+                                    }}
+                                  >
+                                    +{product.multimaterial_mapping.length - 1}
+                                  </span>
+                                )}
                               </div>
-                            )
+                              <small style={{ color: '#7f8c8d', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                {product.materials?.material_type || ''} - 
+                                {product.materials?.color_hex && (
+                                  <span
+                                    style={{
+                                      display: 'inline-block',
+                                      width: '12px',
+                                      height: '12px',
+                                      borderRadius: '50%',
+                                      backgroundColor: product.materials.color_hex,
+                                      border: '1px solid #ddd'
+                                    }}
+                                  />
+                                )}
+                                {product.materials?.color || ''}
+                              </small>
+                              {(() => {
+                                const details = getMultimaterialDetails(product)
+                                if (details.length <= 1 || hoveredMaterialCard?.id !== product.id) return null
+
+                                return (
+                                  <div
+                                    style={{ ...getHoverCardStyle(hoveredMaterialCard?.rect, 260), minWidth: '220px' }}
+                                  >
+                                    <div style={{ fontSize: '12px', fontWeight: '600', color: '#1a1a1a', marginBottom: '6px' }}>
+                                      Materiali usati
+                                    </div>
+                                    {details.map((item) => {
+                                      if (!item.material) {
+                                        return (
+                                          <div key={`mm-${item.colorIndex}`} style={{ fontSize: '12px', color: '#7f8c8d', marginBottom: '4px' }}>
+                                            Colore {item.colorIndex || ''}: N/A
+                                          </div>
+                                        )
+                                      }
+
+                                      return (
+                                        <div key={`mm-${item.colorIndex}`} style={{ marginBottom: '6px' }}>
+                                          <div style={{ fontSize: '12px', fontWeight: '600', color: '#1a1a1a' }}>
+                                            Colore {item.colorIndex}
+                                          </div>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#7f8c8d' }}>
+                                            <span style={{ color: '#1a1a1a' }}>{item.material.brand}</span>
+                                            {item.material.material_type && (
+                                              <span>{item.material.material_type}</span>
+                                            )}
+                                            {item.material.color && (
+                                              <>
+                                                {item.material.color_hex && (
+                                                  <span
+                                                    style={{
+                                                      display: 'inline-block',
+                                                      width: '10px',
+                                                      height: '10px',
+                                                      borderRadius: '50%',
+                                                      backgroundColor: item.material.color_hex,
+                                                      border: '1px solid #ddd'
+                                                    }}
+                                                  />
+                                                )}
+                                                <span>{item.material.color}</span>
+                                              </>
+                                            )}
+                                          </div>
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                )
+                              })()}
+                            </div>
+                          </div>
+                        </td>
+                        <td>
+                          <span className={`status-badge ${statusBadge.class}`}>
+                            {statusBadge.label}
+                          </span>
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>{product.storage_location || 'N/A'}</td>
+                        <td>
+                          €{(() => {
+                            const baseCost = parseFloat(product.production_cost || 0)
+                            const extraCosts = product.production_extra_costs || []
+                            const extraTotal = extraCosts.reduce((sum, cost) => sum + (parseFloat(cost?.amount || 0) || 0), 0)
+                            return (baseCost + extraTotal).toFixed(2)
                           })()}
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <span className={`status-badge ${statusBadge.class}`}>
-                        {statusBadge.label}
-                      </span>
-                    </td>
-                    <td>
-                      €{(() => {
-                        const baseCost = parseFloat(product.production_cost || 0)
-                        const extraCosts = product.production_extra_costs || []
-                        const extraTotal = extraCosts.reduce((sum, cost) => sum + (parseFloat(cost?.amount || 0) || 0), 0)
-                        return (baseCost + extraTotal).toFixed(2)
-                      })()}
-                    </td>
-                    <td>€{parseFloat(product.sale_price).toFixed(2)}</td>
-                    <td>
-                      <div className="action-buttons">
-                        {product.status !== 'venduto' && (
-                          <>
-                            {product.status === 'in_coda' && (
-                              <button
-                                className="btn-status"
-                                onClick={() => handleStatusChange(product.id, 'disponibile')}
-                                title="Imposta come disponibile"
-                              >
-                                <FontAwesomeIcon icon={faCheck} />
-                              </button>
+                        </td>
+                        <td>€{parseFloat(product.sale_price).toFixed(2)}</td>
+                        <td>
+                          <div className="action-buttons">
+                            {product.status !== 'venduto' && (
+                              <>
+                                {product.status === 'in_coda' && (
+                                  <button
+                                    className="btn-status"
+                                    onClick={() => handleStatusChange(product.id, 'disponibile')}
+                                    title="Imposta come disponibile"
+                                  >
+                                    <FontAwesomeIcon icon={faCheck} />
+                                  </button>
+                                )}
+                                {product.status === 'disponibile' && (
+                                  <button
+                                    className="btn-status"
+                                    onClick={() => handleStatusChange(product.id, 'venduto')}
+                                    title="Vendi"
+                                  >
+                                    <FontAwesomeIcon icon={faDollarSign} />
+                                  </button>
+                                )}
+                              </>
                             )}
-                            {product.status === 'disponibile' && (
-                              <button
-                                className="btn-status"
-                                onClick={() => handleStatusChange(product.id, 'venduto')}
-                                title="Vendi"
-                              >
-                                <FontAwesomeIcon icon={faDollarSign} />
-                              </button>
-                            )}
-                          </>
-                        )}
-                        <button 
-                          className="btn-edit" 
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleEditProduct(product)
-                          }} 
-                          title="Modifica materiale/bobina"
-                        >
-                          <FontAwesomeIcon icon={faEdit} />
-                        </button>
-                        <button className="btn-delete" onClick={() => handleDelete(product.id)} title="Elimina">
-                          <FontAwesomeIcon icon={faTrash} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                            <button 
+                              className="btn-edit" 
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleEditProduct(product)
+                              }} 
+                              title="Modifica magazzino/prezzo"
+                            >
+                              <FontAwesomeIcon icon={faEdit} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })
                 )
               })
             )}
@@ -4702,6 +4813,9 @@ export default function Products() {
                     </span>
                   </div>
                   <div className="detail-item">
+                    <strong>Magazzino:</strong> {detailProduct.storage_location || 'N/A'}
+                  </div>
+                  <div className="detail-item">
                     <strong>Creato il:</strong> {formatDate(detailProduct.created_at)}
                   </div>
                   {detailProduct.sold_at && (
@@ -4722,6 +4836,46 @@ export default function Products() {
                 Chiudi
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showEditInfoModal && editingInfoProduct && (
+        <div className="modal-overlay" onClick={() => { setShowEditInfoModal(false); setEditingInfoProduct(null) }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+            <h2>Modifica Magazzino / Prezzo</h2>
+            <form onSubmit={handleUpdateProductInfo}>
+              <div className="form-group">
+                <label>Prezzo di Vendita (€)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={editInfoForm.sale_price}
+                  onChange={(e) => setEditInfoForm({ ...editInfoForm, sale_price: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>Magazzino</label>
+                <select
+                  value={editInfoForm.storage_location}
+                  onChange={(e) => setEditInfoForm({ ...editInfoForm, storage_location: e.target.value })}
+                >
+                  <option value="">N/A</option>
+                  <option value="Mesmerized SRLS">Mesmerized SRLS</option>
+                  <option value="Robe di Robertaebasta">Robe di Robertaebasta</option>
+                </select>
+              </div>
+              <div className="modal-actions">
+                <button type="button" className="btn-secondary" onClick={() => { setShowEditInfoModal(false); setEditingInfoProduct(null) }}>
+                  Annulla
+                </button>
+                <button type="submit" className="btn-primary">
+                  Salva
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

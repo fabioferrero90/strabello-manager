@@ -19,12 +19,17 @@ export default function PrintQueue() {
   const [sortBy, setSortBy] = useState('priorita')
   const [showModal, setShowModal] = useState(false) // Modal per creazione prodotto
   const [showEditModal, setShowEditModal] = useState(false)
+  const [showEditInfoModal, setShowEditInfoModal] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
   const [detailProduct, setDetailProduct] = useState(null)
   const [showDetailModal, setShowDetailModal] = useState(false)
   const [editFormData, setEditFormData] = useState({
     material_id: '',
     spool_id: '',
+  })
+  const [editInfoForm, setEditInfoForm] = useState({
+    sale_price: '',
+    storage_location: ''
   })
   const [editAvailableSpools, setEditAvailableSpools] = useState([])
   const [showMaterialDropdown, setShowMaterialDropdown] = useState(false)
@@ -829,9 +834,15 @@ export default function PrintQueue() {
 
   const handleStatusChange = async (id, newStatus) => {
     try {
+      const updateData = { status: newStatus }
+
+      if (newStatus === 'disponibile') {
+        updateData.storage_location = 'Mesmerized SRLS'
+      }
+
       const { error } = await supabase
         .from('products')
-        .update({ status: newStatus })
+        .update(updateData)
         .eq('id', id)
 
       if (error) throw error
@@ -850,6 +861,44 @@ export default function PrintQueue() {
       console.error('Error updating status:', error)
       alert('Errore durante l\'aggiornamento dello stato')
     }
+  }
+
+  const handleUpdateProductInfo = async (e) => {
+    e.preventDefault()
+    if (!editingProduct) return
+
+    const salePrice = parseFloat(editInfoForm.sale_price)
+    if (Number.isNaN(salePrice) || salePrice < 0) {
+      alert('Inserisci un prezzo valido')
+      return
+    }
+
+    const updateData = {
+      sale_price: salePrice,
+      storage_location: editInfoForm.storage_location || null
+    }
+
+    const { error } = await supabase
+      .from('products')
+      .update(updateData)
+      .eq('id', editingProduct.id)
+
+    if (error) {
+      alert('Errore durante l\'aggiornamento: ' + error.message)
+      return
+    }
+
+    await logAction(
+      'modifica_prodotto',
+      'prodotto',
+      editingProduct.id,
+      editingProduct.sku || 'Prodotto sconosciuto',
+      { changes: updateData }
+    )
+
+    await loadData()
+    setShowEditInfoModal(false)
+    setEditingProduct(null)
   }
 
   const handleReorderQueue = async (draggedId, targetId) => {
@@ -906,7 +955,7 @@ export default function PrintQueue() {
       alert('La modifica del materiale non è disponibile per prodotti multimateriale')
       return
     }
-    
+
     setEditingProduct(product)
     setEditFormData({
       material_id: product.material_id || '',
@@ -990,6 +1039,10 @@ export default function PrintQueue() {
     if (!confirm('Sei sicuro di voler eliminare questo prodotto?')) return
 
     const product = products.find((p) => p.id === id)
+    if (product && !['in_coda', 'in_stampa'].includes(product.status)) {
+      alert('Puoi eliminare solo prodotti in coda o in stampa.')
+      return
+    }
     const productSku = product?.sku || 'Prodotto sconosciuto'
 
     const { error } = await supabase.from('products').delete().eq('id', id)
@@ -1456,9 +1509,6 @@ export default function PrintQueue() {
                         >
                           <FontAwesomeIcon icon={faEdit} />
                         </button>
-                        <button className="btn-delete" onClick={() => handleDelete(product.id)} title="Elimina">
-                          <FontAwesomeIcon icon={faTrash} />
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1748,6 +1798,50 @@ export default function PrintQueue() {
         </div>
       )}
 
+      {showEditInfoModal && editingProduct && (
+        <div className="modal-overlay" onClick={() => { setShowEditInfoModal(false); setEditingProduct(null) }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+            <h2>Modifica Magazzino / Prezzo</h2>
+            <form onSubmit={handleUpdateProductInfo}>
+              <div className="form-group">
+                <label>Prezzo di Vendita (€)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={editInfoForm.sale_price}
+                  onChange={(e) => setEditInfoForm({ ...editInfoForm, sale_price: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>Magazzino</label>
+                <select
+                  value={editInfoForm.storage_location}
+                  onChange={(e) => setEditInfoForm({ ...editInfoForm, storage_location: e.target.value })}
+                >
+                  <option value="">N/A</option>
+                  <option value="Mesmerized SRLS">Mesmerized SRLS</option>
+                  <option value="Robe di Robertaebasta">Robe di Robertaebasta</option>
+                </select>
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => { setShowEditInfoModal(false); setEditingProduct(null) }}
+                >
+                  Annulla
+                </button>
+                <button type="submit" className="btn-primary">
+                  Salva
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Modale dettaglio prodotto - semplificata */}
       {showDetailModal && detailProduct && (
         <div className="modal-overlay" onClick={() => { setShowDetailModal(false); setDetailProduct(null) }}>
@@ -1831,6 +1925,9 @@ export default function PrintQueue() {
               </div>
               <div style={{ marginBottom: '10px' }}>
                 <strong>Prezzo Vendita:</strong> €{parseFloat(detailProduct.sale_price || 0).toFixed(2)}
+              </div>
+              <div style={{ marginBottom: '10px' }}>
+                <strong>Magazzino:</strong> {detailProduct.storage_location || 'N/A'}
               </div>
               <div style={{ marginBottom: '10px' }}>
                 <strong>Creato il:</strong> {formatDate(detailProduct.created_at)}
