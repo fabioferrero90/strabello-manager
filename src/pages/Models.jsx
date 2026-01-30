@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { processAndUploadImage, deleteImageFromStorage, validateImageFile } from '../lib/imageUpload'
+import { upload3mfToStorage, delete3mfFromStorage, validate3mfFile } from '../lib/fileUpload'
+import { openInBambuStudio } from '../lib/bambuStudio'
 import { logAction } from '../lib/logging'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faEdit, faTrash, faPlus, faDollarSign } from '@fortawesome/free-solid-svg-icons'
+import { faEdit, faTrash, faPlus, faCube } from '@fortawesome/free-solid-svg-icons'
 import './Models.css'
 
 export default function Models() {
@@ -18,6 +20,9 @@ export default function Models() {
   const [editingModel, setEditingModel] = useState(null)
   const [selectedFile, setSelectedFile] = useState(null)
   const [imagePreview, setImagePreview] = useState(null)
+  const [selected3mfFile, setSelected3mfFile] = useState(null)
+  const [threeMfName, setThreeMfName] = useState('')
+  const [remove3mfFile, setRemove3mfFile] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [formData, setFormData] = useState({
     name: '',
@@ -26,6 +31,7 @@ export default function Models() {
     weight_kg: '',
     dimensions: '',
     photo_url: '',
+    model_3mf_url: '',
     is_multimaterial: false,
     color1_weight_g: '',
     color2_weight_g: '',
@@ -177,6 +183,7 @@ export default function Models() {
       }
 
       let photoUrl = formData.photo_url
+      let model3mfUrl = formData.model_3mf_url
 
       // Se è stato selezionato un nuovo file, caricalo
       if (selectedFile) {
@@ -197,6 +204,26 @@ export default function Models() {
         }
       }
 
+      if (selected3mfFile) {
+        try {
+          if (editingModel && editingModel.model_3mf_url) {
+            if (editingModel.model_3mf_url.includes('supabase.co/storage')) {
+              await delete3mfFromStorage(editingModel.model_3mf_url)
+            }
+          }
+          model3mfUrl = await upload3mfToStorage(selected3mfFile)
+        } catch (error) {
+          alert(error.message)
+          setUploading(false)
+          return
+        }
+      } else if (remove3mfFile && editingModel?.model_3mf_url) {
+        if (editingModel.model_3mf_url.includes('supabase.co/storage')) {
+          await delete3mfFromStorage(editingModel.model_3mf_url)
+        }
+        model3mfUrl = null
+      }
+
       const modelData = {
         name: formData.name,
         description: formData.description || null,
@@ -204,6 +231,7 @@ export default function Models() {
         weight_kg: weight,
         dimensions: formData.dimensions || null,
         photo_url: photoUrl || null,
+        model_3mf_url: model3mfUrl || null,
         is_multimaterial: formData.is_multimaterial || false,
         color1_weight_g: formData.is_multimaterial && formData.color1_weight_g ? parseFloat(formData.color1_weight_g) : null,
         color2_weight_g: formData.is_multimaterial && formData.color2_weight_g ? parseFloat(formData.color2_weight_g) : null,
@@ -269,6 +297,7 @@ export default function Models() {
       weight_kg: model.weight_kg || '', // Memorizzato in kg nel database
       dimensions: model.dimensions || '',
       photo_url: model.photo_url || '',
+      model_3mf_url: model.model_3mf_url || '',
       is_multimaterial: model.is_multimaterial || false,
       color1_weight_g: model.color1_weight_g || '',
       color2_weight_g: model.color2_weight_g || '',
@@ -277,6 +306,9 @@ export default function Models() {
     })
     setSelectedFile(null)
     setImagePreview(model.photo_url || null)
+    setSelected3mfFile(null)
+    setThreeMfName(model.model_3mf_url ? model.model_3mf_url.split('/').pop() : '')
+    setRemove3mfFile(false)
     setShowModal(true)
   }
 
@@ -311,6 +343,9 @@ export default function Models() {
     if (model && model.photo_url && model.photo_url.includes('supabase.co/storage')) {
       await deleteImageFromStorage(model.photo_url)
     }
+    if (model && model.model_3mf_url && model.model_3mf_url.includes('supabase.co/storage')) {
+      await delete3mfFromStorage(model.model_3mf_url)
+    }
 
     const { error } = await supabase.from('models').delete().eq('id', id)
 
@@ -319,6 +354,11 @@ export default function Models() {
     } else {
       await loadModels()
     }
+  }
+
+  const handleOpenInBambu = (model3mfUrl) => {
+    if (!model3mfUrl) return
+    openInBambuStudio(model3mfUrl)
   }
 
   const handleFileChange = (e) => {
@@ -347,11 +387,40 @@ export default function Models() {
     reader.readAsDataURL(file)
   }
 
+  const handle3mfChange = (e) => {
+    const file = e.target.files[0]
+    if (!file) {
+      setSelected3mfFile(null)
+      setThreeMfName(formData.model_3mf_url ? formData.model_3mf_url.split('/').pop() : '')
+      return
+    }
+
+    const validation = validate3mfFile(file)
+    if (!validation.valid) {
+      alert(validation.error)
+      e.target.value = ''
+      return
+    }
+
+    setSelected3mfFile(file)
+    setThreeMfName(file.name)
+    setRemove3mfFile(false)
+  }
+
   const handleRemoveImage = () => {
     setSelectedFile(null)
     setImagePreview(null)
     // Reset input file
     const fileInput = document.getElementById('photo-upload')
+    if (fileInput) fileInput.value = ''
+  }
+
+  const handleRemove3mf = () => {
+    setSelected3mfFile(null)
+    setThreeMfName('')
+    setRemove3mfFile(true)
+    setFormData({ ...formData, model_3mf_url: '' })
+    const fileInput = document.getElementById('model-3mf-upload')
     if (fileInput) fileInput.value = ''
   }
 
@@ -363,6 +432,7 @@ export default function Models() {
       weight_kg: '',
       dimensions: '',
       photo_url: '',
+      model_3mf_url: '',
       is_multimaterial: false,
       color1_weight_g: '',
       color2_weight_g: '',
@@ -372,9 +442,14 @@ export default function Models() {
     setEditingModel(null)
     setSelectedFile(null)
     setImagePreview(null)
+    setSelected3mfFile(null)
+    setThreeMfName('')
+    setRemove3mfFile(false)
     // Reset input file
     const fileInput = document.getElementById('photo-upload')
     if (fileInput) fileInput.value = ''
+    const modelFileInput = document.getElementById('model-3mf-upload')
+    if (modelFileInput) modelFileInput.value = ''
   }
 
   if (loading) return <div className="loading">Caricamento...</div>
@@ -458,7 +533,6 @@ export default function Models() {
             <tr>
               <th>Immagine</th>
               <th>Nome</th>
-              <th>SKU</th>
               <th>Note</th>
               <th>Peso</th>
               <th>Dimensioni</th>
@@ -470,7 +544,7 @@ export default function Models() {
           <tbody>
             {filteredModels.length === 0 ? (
               <tr>
-                <td colSpan="9" className="empty-state">
+                <td colSpan="8" className="empty-state">
                   {models.length === 0 
                     ? 'Nessun modello trovato. Crea il primo modello!'
                     : 'Nessun modello corrisponde ai filtri selezionati.'}
@@ -492,15 +566,13 @@ export default function Models() {
                       </div>
                     )}
                   </td>
-                  <td>
-                    <strong>{model.name}</strong>
-                  </td>
-                  <td>
-                    {model.sku ? (
-                      <span style={{ fontFamily: 'monospace', color: '#1a1a1a' }}>{model.sku}</span>
-                    ) : (
-                      <span style={{ color: '#7f8c8d' }}>-</span>
+                  <td className="model-name">
+                    {model.sku && (
+                      <div style={{ fontSize: '12px', color: '#7f8c8d', marginBottom: '4px' }}>
+                        {model.sku}
+                      </div>
                     )}
+                    <strong>{model.name}</strong>
                   </td>
                   <td>
                     {model.description ? (
@@ -546,12 +618,33 @@ export default function Models() {
                       fontWeight: '600',
                       color: model.sales_revenue > 0 ? '#2e7d32' : '#7f8c8d'
                     }}>
-                      <FontAwesomeIcon icon={faDollarSign} style={{ fontSize: '12px' }} />
                       €{model.sales_revenue ? model.sales_revenue.toFixed(2) : '0.00'}
                     </div>
                   </td>
                   <td>
                     <div className="action-buttons">
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={!model.model_3mf_url}
+                        onClick={() => handleOpenInBambu(model.model_3mf_url)}
+                        style={{
+                          background: model.model_3mf_url ? '#00b56a' : undefined,
+                          borderColor: model.model_3mf_url ? '#00b56a' : undefined,
+                          color: model.model_3mf_url ? '#ffffff' : undefined,
+                          opacity: model.model_3mf_url ? 1 : 0.5,
+                          cursor: model.model_3mf_url ? 'pointer' : 'not-allowed',
+                          width: '36px',
+                          height: '36px',
+                          padding: 0,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                        title="Apri in Bambu Studio"
+                      >
+                        <FontAwesomeIcon icon={faCube} />
+                      </button>
                       <button className="btn-edit" onClick={() => handleEdit(model)} title="Modifica">
                         <FontAwesomeIcon icon={faEdit} />
                       </button>
@@ -694,6 +787,44 @@ export default function Models() {
                   onChange={(e) => setFormData({ ...formData, dimensions: e.target.value })}
                   placeholder="Es: 10 x 5 x 3 cm (Altezza x Larghezza x Profondità)"
                 />
+              </div>
+              <div className="form-group">
+                <label>File 3MF</label>
+                <input
+                  id="model-3mf-upload"
+                  type="file"
+                  accept=".3mf"
+                  onChange={handle3mfChange}
+                  style={{ display: 'none' }}
+                />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => document.getElementById('model-3mf-upload')?.click()}
+                  >
+                    {threeMfName ? 'Sostituisci file' : 'Carica file'}
+                  </button>
+                  <span style={{ fontSize: '14px', color: threeMfName ? '#1a1a1a' : '#7f8c8d' }}>
+                    {threeMfName || 'Nessun file 3MF selezionato'}
+                  </span>
+                  {(threeMfName || formData.model_3mf_url) && (
+                    <button
+                      type="button"
+                      onClick={handleRemove3mf}
+                      style={{
+                        border: '1px solid #f5c6cb',
+                        background: '#f8d7da',
+                        color: '#721c24',
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Rimuovi
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="form-group">
                 <label>Foto</label>

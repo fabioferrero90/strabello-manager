@@ -37,12 +37,18 @@
   padding: 15px;
   text-align: left;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .models-table td {
   padding: 15px;
   border-bottom: 1px solid #ecf0f1;
   vertical-align: middle;
+  white-space: nowrap;
+}
+
+.model-name {
+  white-space: normal;
 }
 
 .models-table th:last-child,

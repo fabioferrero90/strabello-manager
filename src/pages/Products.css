@@ -173,7 +173,7 @@
 }
 
 .btn-queue {
-  background: #f39c12;
+  background: #6c757d;
   color: white;
   border: none;
   padding: 10px;
@@ -189,7 +189,7 @@
 }
 
 .btn-queue:hover {
-  background: #d68910;
+  background: #5a6268;
 }
 
 .btn-move {

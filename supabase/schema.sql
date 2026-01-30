@@ -37,6 +37,7 @@ CREATE TABLE public.models (
   weight_kg numeric NOT NULL,
   dimensions text,
   photo_url text,
+  model_3mf_url text,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
   sku text UNIQUE,

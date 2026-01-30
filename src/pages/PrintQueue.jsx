@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { logAction } from '../lib/logging'
+import { openInBambuStudio } from '../lib/bambuStudio'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faCheck, faTrash, faEdit, faPlus, faTimes, faMinus, faPrint, faGripVertical } from '@fortawesome/free-solid-svg-icons'
+import { faCheck, faTrash, faEdit, faPlus, faTimes, faMinus, faPrint, faGripVertical, faCube } from '@fortawesome/free-solid-svg-icons'
 import './Products.css'
 
 export default function PrintQueue() {
@@ -241,7 +242,7 @@ export default function PrintQueue() {
         .from('products')
         .select(`
           *,
-          models(name, weight_kg, photo_url, description, dimensions, sku, is_multimaterial, color1_weight_g, color2_weight_g, color3_weight_g, color4_weight_g),
+          models(name, weight_kg, photo_url, description, dimensions, sku, model_3mf_url, is_multimaterial, color1_weight_g, color2_weight_g, color3_weight_g, color4_weight_g),
           materials(brand, material_type, color, color_hex, purchased_from, cost_per_kg, bobina_photo_url, print_example_photo_url, code, status)
         `)
         .order('created_at', { ascending: false }),
@@ -1182,6 +1183,11 @@ export default function PrintQueue() {
     return material ? `${material.brand} - ${material.material_type} - ${material.color}` : 'Materiale'
   }
 
+  const handleOpenInBambu = (model3mfUrl) => {
+    if (!model3mfUrl) return
+    openInBambuStudio(model3mfUrl)
+  }
+
   const formatDate = (dateString) => {
     if (!dateString) return '-'
     const date = new Date(dateString)
@@ -1591,6 +1597,31 @@ export default function PrintQueue() {
                     <td>€{parseFloat(product.sale_price).toFixed(2)}</td>
                     <td>
                       <div className="action-buttons">
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          disabled={!product.models?.model_3mf_url}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleOpenInBambu(product.models?.model_3mf_url)
+                          }}
+                          style={{
+                            background: product.models?.model_3mf_url ? '#00b56a' : undefined,
+                            borderColor: product.models?.model_3mf_url ? '#00b56a' : undefined,
+                            color: product.models?.model_3mf_url ? '#ffffff' : undefined,
+                            opacity: product.models?.model_3mf_url ? 1 : 0.5,
+                            cursor: product.models?.model_3mf_url ? 'pointer' : 'not-allowed',
+                            width: '36px',
+                            height: '36px',
+                            padding: 0,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}
+                          title="Apri in Bambu Studio"
+                        >
+                          <FontAwesomeIcon icon={faCube} />
+                        </button>
                         {product.status === 'in_stampa' ? (
                           <button
                             className="btn-queue"
@@ -1608,33 +1639,39 @@ export default function PrintQueue() {
                             <FontAwesomeIcon icon={faPrint} />
                           </button>
                         )}
-                        <button
-                          className="btn-status"
-                          onClick={() => handleStatusChange(product.id, 'disponibile')}
-                          title="Imposta come disponibile"
-                        >
-                          <FontAwesomeIcon icon={faCheck} />
-                        </button>
-                        <button 
-                          className="btn-edit" 
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleEditProduct(product)
-                          }} 
-                          title="Modifica materiale/bobina"
-                        >
-                          <FontAwesomeIcon icon={faEdit} />
-                        </button>
-                        <button
-                          className="btn-delete"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            openRestoreModal(product)
-                          }}
-                          title="Elimina dalla coda"
-                        >
-                          <FontAwesomeIcon icon={faTrash} />
-                        </button>
+                        {product.status === 'in_stampa' && (
+                          <button
+                            className="btn-status"
+                            onClick={() => handleStatusChange(product.id, 'disponibile')}
+                            title="Imposta come disponibile"
+                          >
+                            <FontAwesomeIcon icon={faCheck} />
+                          </button>
+                        )}
+                        {product.status === 'in_coda' && (
+                          <>
+                            <button 
+                              className="btn-edit" 
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleEditProduct(product)
+                              }} 
+                              title="Modifica materiale/bobina"
+                            >
+                              <FontAwesomeIcon icon={faEdit} />
+                            </button>
+                            <button
+                              className="btn-delete"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                openRestoreModal(product)
+                              }}
+                              title="Elimina dalla coda"
+                            >
+                              <FontAwesomeIcon icon={faTrash} />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
