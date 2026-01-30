@@ -23,6 +23,9 @@ export default function PrintQueue() {
   const [editingProduct, setEditingProduct] = useState(null)
   const [detailProduct, setDetailProduct] = useState(null)
   const [showDetailModal, setShowDetailModal] = useState(false)
+  const [showRestoreModal, setShowRestoreModal] = useState(false)
+  const [restoreProduct, setRestoreProduct] = useState(null)
+  const [restoreSelections, setRestoreSelections] = useState({})
   const [editFormData, setEditFormData] = useState({
     material_id: '',
     spool_id: '',
@@ -1035,35 +1038,148 @@ export default function PrintQueue() {
     }
   }
 
-  const handleDelete = async (id) => {
-    if (!confirm('Sei sicuro di voler eliminare questo prodotto?')) return
-
-    const product = products.find((p) => p.id === id)
+  const openRestoreModal = (product) => {
     if (product && !['in_coda', 'in_stampa'].includes(product.status)) {
       alert('Puoi eliminare solo prodotti in coda o in stampa.')
       return
     }
-    const productSku = product?.sku || 'Prodotto sconosciuto'
+    const productModelId = product?.model_id || product?.models?.id
+    const model = models.find((m) => m.id === productModelId)
+    if (!model) {
+      alert('Modello non trovato: impossibile ripristinare le bobine.')
+      return
+    }
 
-    const { error } = await supabase.from('products').delete().eq('id', id)
+    const mapping = Array.isArray(product?.multimaterial_mapping) ? product.multimaterial_mapping : []
+    const sortedMapping = [...mapping].sort((a, b) => (a.color || 0) - (b.color || 0))
+    const initialSelections = {}
+
+    if (sortedMapping.length > 0) {
+      for (const item of sortedMapping) {
+        initialSelections[`color${item.color}`] = item.spool_id || ''
+      }
+    } else {
+      initialSelections.single = product?.spool_id || ''
+    }
+
+    setRestoreSelections(initialSelections)
+    setRestoreProduct(product)
+    setShowRestoreModal(true)
+  }
+
+  const handleRestoreAndDelete = async () => {
+    if (!restoreProduct) return
+
+    const productModelId = restoreProduct?.model_id || restoreProduct?.models?.id
+    const model = models.find((m) => m.id === productModelId)
+    if (!model) {
+      alert('Modello non trovato: impossibile ripristinare le bobine.')
+      return
+    }
+
+    const mapping = Array.isArray(restoreProduct?.multimaterial_mapping) ? restoreProduct.multimaterial_mapping : []
+    const sortedMapping = [...mapping].sort((a, b) => (a.color || 0) - (b.color || 0))
+
+    const spoolIncrements = new Map()
+    if (sortedMapping.length > 0) {
+      for (const item of sortedMapping) {
+        const spoolId = restoreSelections[`color${item.color}`]
+        if (!spoolId) {
+          alert(`Seleziona una bobina per Colore ${item.color}`)
+          return
+        }
+        const weightGrams = parseFloat(model[`color${item.color}_weight_g`] || 0)
+        if (!weightGrams || weightGrams <= 0) {
+          alert('Peso del colore non valido: impossibile ripristinare le bobine.')
+          return
+        }
+        spoolIncrements.set(spoolId, (spoolIncrements.get(spoolId) || 0) + weightGrams)
+      }
+    } else {
+      const spoolId = restoreSelections.single
+      if (!spoolId) {
+        alert('Seleziona una bobina per il materiale')
+        return
+      }
+      const weightGrams = parseFloat(model.weight_kg || 0) * 1000
+      if (!weightGrams || weightGrams <= 0) {
+        alert('Peso del modello non valido: impossibile ripristinare le bobine.')
+        return
+      }
+      spoolIncrements.set(spoolId, (spoolIncrements.get(spoolId) || 0) + weightGrams)
+    }
+
+    const spoolRollback = []
+    for (const [spoolId, gramsToAdd] of spoolIncrements.entries()) {
+      const { data: spoolData, error: spoolSelectError } = await supabase
+        .from('spools')
+        .select('remaining_grams')
+        .eq('id', spoolId)
+        .single()
+
+      if (spoolSelectError) {
+        alert('Errore durante il recupero della bobina: ' + spoolSelectError.message)
+        return
+      }
+
+      const currentGrams = parseFloat(spoolData?.remaining_grams || 0)
+      const newRemainingGrams = currentGrams + gramsToAdd
+
+      const { error: spoolUpdateError } = await supabase
+        .from('spools')
+        .update({ remaining_grams: newRemainingGrams })
+        .eq('id', spoolId)
+
+      if (spoolUpdateError) {
+        alert('Errore durante il ripristino della bobina: ' + spoolUpdateError.message)
+        return
+      }
+
+      spoolRollback.push({ spoolId, oldGrams: currentGrams })
+      setSpools(prev => prev.map(spool => (
+        spool.id === spoolId ? { ...spool, remaining_grams: newRemainingGrams } : spool
+      )))
+    }
+
+    const { error } = await supabase.from('products').delete().eq('id', restoreProduct.id)
 
     if (error) {
+      for (const rollback of spoolRollback) {
+        await supabase
+          .from('spools')
+          .update({ remaining_grams: rollback.oldGrams })
+          .eq('id', rollback.spoolId)
+      }
+      setSpools(prev => prev.map(spool => {
+        const rollback = spoolRollback.find((item) => item.spoolId === spool.id)
+        return rollback ? { ...spool, remaining_grams: rollback.oldGrams } : spool
+      }))
       alert('Errore durante l\'eliminazione: ' + error.message)
-    } else {
-      await logAction(
-        'eliminazione_prodotto',
-        'prodotto',
-        id,
-        productSku,
-        { product_data: product }
-      )
-      await loadData()
+      return
     }
+
+    const productSku = restoreProduct?.sku || 'Prodotto sconosciuto'
+    await logAction(
+      'eliminazione_prodotto',
+      'prodotto',
+      restoreProduct.id,
+      productSku,
+      { product_data: restoreProduct }
+    )
+    setShowRestoreModal(false)
+    setRestoreProduct(null)
+    setRestoreSelections({})
+    await loadData()
   }
 
   const handleProductClick = (product) => {
     setDetailProduct(product)
     setShowDetailModal(true)
+  }
+
+  const getMaterialLabel = (materialId) => {
+    const material = materials.find((m) => m.id === materialId)
+    return material ? `${material.brand} - ${material.material_type} - ${material.color}` : 'Materiale'
   }
 
   const formatDate = (dateString) => {
@@ -1509,6 +1625,16 @@ export default function PrintQueue() {
                         >
                           <FontAwesomeIcon icon={faEdit} />
                         </button>
+                        <button
+                          className="btn-delete"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openRestoreModal(product)
+                          }}
+                          title="Elimina dalla coda"
+                        >
+                          <FontAwesomeIcon icon={faTrash} />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1794,6 +1920,101 @@ export default function PrintQueue() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {showRestoreModal && restoreProduct && (
+        <div className="modal-overlay" onClick={() => { setShowRestoreModal(false); setRestoreProduct(null); setRestoreSelections({}) }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px' }}>
+            <h2>Ripristina materiale alle bobine</h2>
+            <div style={{ marginBottom: '16px', padding: '10px', background: '#f8f9fa', borderRadius: '6px' }}>
+              <strong>{restoreProduct.sku}</strong> - {restoreProduct.models?.name || 'N/A'}
+            </div>
+
+            {(() => {
+              const mapping = Array.isArray(restoreProduct?.multimaterial_mapping)
+                ? restoreProduct.multimaterial_mapping
+                : []
+              const sortedMapping = [...mapping].sort((a, b) => (a.color || 0) - (b.color || 0))
+
+              if (sortedMapping.length > 0) {
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    {sortedMapping.map((item) => {
+                      const materialLabel = getMaterialLabel(item.material_id)
+                      const availableSpools = spools.filter((spool) => spool.material_id === item.material_id)
+                      return (
+                        <div key={`restore-color-${item.color}`} className="form-group">
+                          <label>Colore {item.color} - {materialLabel}</label>
+                          <select
+                            value={restoreSelections[`color${item.color}`] || ''}
+                            onChange={(e) => setRestoreSelections(prev => ({ ...prev, [`color${item.color}`]: e.target.value }))}
+                            style={{
+                              width: '100%',
+                              padding: '10px 12px',
+                              border: '1px solid #ced4da',
+                              borderRadius: '4px',
+                              background: 'white'
+                            }}
+                          >
+                            <option value="">Seleziona bobina...</option>
+                            {availableSpools.map((spool) => (
+                              <option key={spool.id} value={spool.id}>
+                                {getMaterialLabel(spool.material_id)} — {parseFloat(spool.remaining_grams || 0).toFixed(0)}g
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              }
+
+              const materialLabel = getMaterialLabel(restoreProduct.material_id)
+              const availableSpools = spools.filter((spool) => spool.material_id === restoreProduct.material_id)
+              return (
+                <div className="form-group">
+                  <label>Bobina - {materialLabel}</label>
+                  <select
+                    value={restoreSelections.single || ''}
+                    onChange={(e) => setRestoreSelections(prev => ({ ...prev, single: e.target.value }))}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: '1px solid #ced4da',
+                      borderRadius: '4px',
+                      background: 'white'
+                    }}
+                  >
+                    <option value="">Seleziona bobina...</option>
+                    {availableSpools.map((spool) => (
+                      <option key={spool.id} value={spool.id}>
+                        {getMaterialLabel(spool.material_id)} — {parseFloat(spool.remaining_grams || 0).toFixed(0)}g
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )
+            })()}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => { setShowRestoreModal(false); setRestoreProduct(null); setRestoreSelections({}) }}
+              >
+                Annulla
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleRestoreAndDelete}
+              >
+                Ripristina ed elimina
+              </button>
+            </div>
           </div>
         </div>
       )}
