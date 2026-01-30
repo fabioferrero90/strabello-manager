@@ -28,14 +28,18 @@ const getChannelLogo = (channelName) => {
 export default function Settings() {
   const [settings, setSettings] = useState({})
   const [vatRegimes, setVatRegimes] = useState([])
+  const [categories, setCategories] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState({ type: '', text: '' })
   const [editingVatRegime, setEditingVatRegime] = useState(null)
   const [showVatRegimeModal, setShowVatRegimeModal] = useState(false)
+  const [editingCategory, setEditingCategory] = useState(null)
+  const [showCategoryModal, setShowCategoryModal] = useState(false)
   const [collapsedSections, setCollapsedSections] = useState({
     channels: true,
-    vat: true
+    vat: true,
+    categories: true
   })
   const [vatRegimeForm, setVatRegimeForm] = useState({
     name: '',
@@ -43,10 +47,14 @@ export default function Settings() {
     countries: '',
     country_code: ''
   })
+  const [categoryForm, setCategoryForm] = useState({
+    name: ''
+  })
 
   useEffect(() => {
     loadSettings()
     loadVatRegimes()
+    loadCategories()
   }, [])
 
   const loadSettings = async () => {
@@ -181,6 +189,126 @@ export default function Settings() {
     } catch (err) {
       console.error('Error:', err)
       setMessage({ type: 'error', text: 'Errore nel caricamento dei regimi IVA' })
+    }
+  }
+
+  const loadCategories = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('model_categories')
+        .select('*')
+        .order('name')
+
+      if (error) {
+        console.error('Error loading categories:', error)
+        setMessage({ type: 'error', text: 'Errore nel caricamento delle categorie' })
+      } else {
+        setCategories(data || [])
+      }
+    } catch (err) {
+      console.error('Error:', err)
+      setMessage({ type: 'error', text: 'Errore nel caricamento delle categorie' })
+    }
+  }
+
+  const handleOpenCategoryModal = (category = null) => {
+    if (category) {
+      setEditingCategory(category)
+      setCategoryForm({
+        name: category.name || ''
+      })
+    } else {
+      setEditingCategory(null)
+      setCategoryForm({
+        name: ''
+      })
+    }
+    setShowCategoryModal(true)
+  }
+
+  const handleCloseCategoryModal = () => {
+    setShowCategoryModal(false)
+    setEditingCategory(null)
+    setCategoryForm({
+      name: ''
+    })
+  }
+
+  const handleSaveCategory = async (e) => {
+    e.preventDefault()
+
+    if (!categoryForm.name.trim()) {
+      setMessage({ type: 'error', text: 'Il nome della categoria è obbligatorio' })
+      return
+    }
+
+    try {
+      if (editingCategory) {
+        const { error } = await supabase
+          .from('model_categories')
+          .update({
+            name: categoryForm.name.trim()
+          })
+          .eq('id', editingCategory.id)
+
+        if (error) throw error
+        setMessage({ type: 'success', text: 'Categoria aggiornata con successo!' })
+      } else {
+        const { error } = await supabase
+          .from('model_categories')
+          .insert({
+            name: categoryForm.name.trim()
+          })
+
+        if (error) throw error
+        setMessage({ type: 'success', text: 'Categoria aggiunta con successo!' })
+      }
+
+      await loadCategories()
+      handleCloseCategoryModal()
+    } catch (error) {
+      console.error('Error saving category:', error)
+      if (error.code === '23505') {
+        setMessage({ type: 'error', text: 'Una categoria con questo nome esiste già' })
+      } else {
+        setMessage({ type: 'error', text: 'Errore nel salvataggio della categoria' })
+      }
+    }
+  }
+
+  const handleDeleteCategory = async (id) => {
+    if (!confirm('Sei sicuro di voler eliminare questa categoria?')) {
+      return
+    }
+
+    try {
+      const { data: models, error: modelsError } = await supabase
+        .from('models')
+        .select('id')
+        .eq('category_id', id)
+        .limit(1)
+
+      if (modelsError) {
+        throw modelsError
+      }
+
+      if (models && models.length > 0) {
+        setMessage({ type: 'error', text: 'Impossibile eliminare: ci sono modelli associati' })
+        return
+      }
+
+      const { error } = await supabase
+        .from('model_categories')
+        .delete()
+        .eq('id', id)
+
+      if (error) throw error
+
+      setMessage({ type: 'success', text: 'Categoria eliminata con successo!' })
+      await loadCategories()
+    } catch (error) {
+      console.error('Error deleting category:', error)
+      setMessage({ type: 'error', text: 'Errore nell\'eliminazione della categoria' })
     }
   }
 
@@ -473,6 +601,114 @@ export default function Settings() {
           )}
         </div>
 
+        <div className={`settings-section${collapsedSections.categories ? ' collapsed' : ''}`}>
+          <div
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+            onClick={() => toggleSection('categories')}
+          >
+            <div>
+              <h2 style={{ marginBottom: '6px' }}>Categorie Modelli</h2>
+              <p className="section-description">
+                Gestisci le categorie disponibili per i modelli. Puoi aggiungere, modificare ed eliminare categorie.
+              </p>
+            </div>
+            <FontAwesomeIcon icon={collapsedSections.categories ? faChevronDown : faChevronUp} />
+          </div>
+
+          {!collapsedSections.categories && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+                <button 
+                  className="btn-primary" 
+                  onClick={() => handleOpenCategoryModal()}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                >
+                  <FontAwesomeIcon icon={faPlus} />
+                  Aggiungi Categoria
+                </button>
+              </div>
+
+              <div style={{ 
+                background: 'white',
+                borderRadius: '12px',
+                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+                overflow: 'hidden',
+                marginTop: '20px'
+              }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#f5f5f5', borderBottom: '2px solid #e0e0e0' }}>
+                      <th style={{ padding: '15px', textAlign: 'left', fontWeight: '600', fontSize: '14px' }}>Nome</th>
+                      <th style={{ padding: '15px', textAlign: 'right', fontWeight: '600', fontSize: '14px' }}>Azioni</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {categories.map((category, index) => (
+                      <tr 
+                        key={category.id}
+                        style={{ 
+                          borderBottom: index < categories.length - 1 ? '1px solid #e0e0e0' : 'none'
+                        }}
+                      >
+                        <td style={{ padding: '15px', fontWeight: '500' }}>
+                          {category.name}
+                        </td>
+                        <td style={{ padding: '15px', textAlign: 'right' }}>
+                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                            <button
+                              onClick={() => handleOpenCategoryModal(category)}
+                              style={{
+                                background: '#2d2d2d',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '6px',
+                                padding: '6px 12px',
+                                cursor: 'pointer',
+                                fontSize: '12px'
+                              }}
+                              title="Modifica"
+                            >
+                              <FontAwesomeIcon icon={faEdit} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteCategory(category.id)}
+                              style={{
+                                background: '#dc3545',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '6px',
+                                padding: '6px 12px',
+                                cursor: 'pointer',
+                                fontSize: '12px'
+                              }}
+                              title="Elimina"
+                            >
+                              <FontAwesomeIcon icon={faTrash} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {categories.length === 0 && (
+                <div style={{ 
+                  textAlign: 'center', 
+                  padding: '40px', 
+                  color: '#888',
+                  background: 'white',
+                  borderRadius: '12px',
+                  marginTop: '20px'
+                }}>
+                  Nessuna categoria configurata. Clicca su "Aggiungi Categoria" per iniziare.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
         <div className={`settings-section${collapsedSections.vat ? ' collapsed' : ''}`}>
           <div
             style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
@@ -604,6 +840,93 @@ export default function Settings() {
           )}
         </div>
       </div>
+
+      {/* Modale per aggiungere/modificare categoria */}
+      {showCategoryModal && (
+        <div 
+          className="modal-overlay" 
+          onClick={handleCloseCategoryModal}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000
+          }}
+        >
+          <div 
+            className="modal-content" 
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'white',
+              borderRadius: '12px',
+              padding: '30px',
+              maxWidth: '500px',
+              width: '90%',
+              maxHeight: '90vh',
+              overflow: 'auto'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2 style={{ margin: 0 }}>
+                {editingCategory ? 'Modifica Categoria' : 'Aggiungi Categoria'}
+              </h2>
+              <button
+                onClick={handleCloseCategoryModal}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  color: '#666'
+                }}
+              >
+                <FontAwesomeIcon icon={faTimes} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCategory}>
+              <div className="form-group">
+                <label>Nome Categoria *</label>
+                <input
+                  type="text"
+                  value={categoryForm.name}
+                  onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })}
+                  placeholder="es: Portaoggetti, Decorazioni, Miniature"
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    border: '2px solid #e0e0e0',
+                    borderRadius: '8px',
+                    fontSize: '14px'
+                  }}
+                />
+                <small>Nome visibile nelle liste e nei filtri</small>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', marginTop: '20px', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={handleCloseCategoryModal}
+                  className="btn-secondary"
+                >
+                  Annulla
+                </button>
+                <button type="submit" className="btn-primary">
+                  <FontAwesomeIcon icon={faSave} style={{ marginRight: '8px' }} />
+                  {editingCategory ? 'Salva Modifiche' : 'Aggiungi Categoria'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modale per aggiungere/modificare regime IVA */}
       {showVatRegimeModal && (

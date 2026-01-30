@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faBox, faClock, faCheck, faDollarSign, faMoneyBill, faLayerGroup, faCube, faShoppingBag, faChartLine } from '@fortawesome/free-solid-svg-icons'
+import { faBox, faClock, faCheck, faDollarSign, faMoneyBill, faLayerGroup, faCube, faShoppingBag, faChartLine, faPrint } from '@fortawesome/free-solid-svg-icons'
 import './Dashboard.css'
 
 export default function Dashboard() {
@@ -13,15 +13,45 @@ export default function Dashboard() {
     sold: 0,
     totalRevenue: 0,
   })
+  const [queueSummary, setQueueSummary] = useState({
+    inQueueQty: 0,
+    inPrintQty: 0,
+    totalQty: 0
+  })
+  const [queueModels, setQueueModels] = useState([])
+  const [recentSales, setRecentSales] = useState([])
+
+  const getReadableTextColor = (hexColor) => {
+    if (!hexColor || typeof hexColor !== 'string') return '#1a1a1a'
+    const cleaned = hexColor.replace('#', '')
+    if (cleaned.length !== 6) return '#1a1a1a'
+    const r = parseInt(cleaned.slice(0, 2), 16)
+    const g = parseInt(cleaned.slice(2, 4), 16)
+    const b = parseInt(cleaned.slice(4, 6), 16)
+    if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return '#1a1a1a'
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return luminance > 0.6 ? '#1a1a1a' : '#ffffff'
+  }
 
   useEffect(() => {
     loadStats()
   }, [])
 
   const loadStats = async () => {
-    const [productsRes, salesRes] = await Promise.all([
+    const [productsRes, queueProductsRes, materialsRes, salesRes, recentSalesRes] = await Promise.all([
       supabase.from('products').select('status, production_cost, production_extra_costs, quantity'),
-      supabase.from('sales').select('revenue, quantity_sold, sold_at')
+      supabase
+        .from('products')
+        .select('quantity, status, queue_order, material_id, multimaterial_mapping, models(name, photo_url), materials(color, color_hex)')
+        .in('status', ['in_coda', 'in_stampa'])
+        .order('queue_order', { ascending: true, nullsFirst: false }),
+      supabase.from('materials').select('id, color, color_hex'),
+      supabase.from('sales').select('revenue, quantity_sold, sold_at'),
+      supabase
+        .from('sales')
+        .select('model_name, sku, revenue, quantity_sold, sold_at, sales_channel, products(models(photo_url, name))')
+        .order('sold_at', { ascending: false })
+        .limit(6)
     ])
 
     const products = productsRes.data || []
@@ -74,6 +104,35 @@ export default function Dashboard() {
       totalRevenue,
     }
     setStats(stats)
+    setQueueSummary({
+      inQueueQty: inQueue,
+      inPrintQty: products
+        .filter((p) => p.status === 'in_stampa')
+        .reduce((sum, p) => sum + parseInt(p.quantity || 0), 0),
+      totalQty: inQueue + products
+        .filter((p) => p.status === 'in_stampa')
+        .reduce((sum, p) => sum + parseInt(p.quantity || 0), 0)
+    })
+    const materialsMap = new Map((materialsRes.data || []).map((material) => [material.id, material]))
+    const queueItems = (queueProductsRes.data || []).map((item) => {
+      const mapping = Array.isArray(item.multimaterial_mapping) ? item.multimaterial_mapping : []
+      const colors = mapping.length > 0
+        ? mapping
+            .slice()
+            .sort((a, b) => (a.color || 0) - (b.color || 0))
+            .map((mapItem) => materialsMap.get(mapItem.material_id))
+            .filter(Boolean)
+        : (item.materials ? [item.materials] : (materialsMap.get(item.material_id) ? [materialsMap.get(item.material_id)] : []))
+
+      return {
+        name: item.models?.name || 'Modello sconosciuto',
+        photo_url: item.models?.photo_url || '',
+        status: item.status,
+        colors
+      }
+    })
+    setQueueModels(queueItems)
+    setRecentSales(recentSalesRes.data || [])
   }
 
   const currentYear = new Date().getFullYear()
@@ -81,9 +140,9 @@ export default function Dashboard() {
   const statCards = [
     { label: 'Valore Magazzino', value: `€${stats.warehouseValue.toFixed(2)}`, icon: faBox, color: '#2d2d2d' },
     { label: 'In Coda', value: stats.inQueue, icon: faClock, color: '#f39c12' },
-    { label: 'Disponibili', value: stats.available, icon: faCheck, color: '#27ae60' },
-    { label: 'Venduti', value: stats.sold, icon: faDollarSign, color: '#e74c3c' },
-    { label: `Fatturato Totale ${currentYear}`, value: `€${stats.totalRevenue.toFixed(2)}`, icon: faMoneyBill, color: '#9b59b6' },
+    { label: 'Prodotti Disponibili', value: stats.available, icon: faCheck, color: '#27ae60' },
+    { label: 'Prodotti Venduti', value: stats.sold, icon: faDollarSign, color: '#e74c3c' },
+    { label: `Fatturato ${currentYear}`, value: `€${stats.totalRevenue.toFixed(2)}`, icon: faMoneyBill, color: '#9b59b6' },
   ]
 
   return (
@@ -103,6 +162,124 @@ export default function Dashboard() {
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="dashboard-secondary-grid">
+        <div className="dashboard-secondary-card">
+          <div className="secondary-card-header">
+            <h3>Riepilogo Coda di Stampa</h3>
+            <Link to="/print-queue" className="secondary-card-link">Apri coda</Link>
+          </div>
+          <div className="queue-models">
+            {queueModels.length === 0 ? (
+              <div className="secondary-empty">Nessun prodotto in coda.</div>
+            ) : (
+              <ul className="queue-models-list">
+                {queueModels.slice(0, 4).map((model, index) => (
+                  <li
+                    key={`${model.name}-${index}`}
+                    className={`queue-models-item${model.status === 'in_stampa' ? ' in-print' : ''}`}
+                  >
+                    {model.photo_url ? (
+                      <img src={model.photo_url} alt={model.name} className="queue-models-photo" />
+                    ) : (
+                      <div className="queue-models-photo placeholder" />
+                    )}
+                    <div className="queue-models-info">
+                      <div className="queue-models-name">{model.name}</div>
+                      <div className="queue-models-colors">
+                        {model.colors.map((color, colorIndex) => (
+                          <span
+                            key={`${model.name}-color-${colorIndex}`}
+                            className="queue-color-pill"
+                            style={{
+                              backgroundColor: color?.color_hex || '#f3f4f6',
+                              color: getReadableTextColor(color?.color_hex)
+                            }}
+                          >
+                            <span>{color?.color || 'Colore'}</span>
+                          </span>
+                        ))}
+                        {model.colors.length === 0 && (
+                          <span className="queue-color-pill empty">Nessun colore</span>
+                        )}
+                      </div>
+                    </div>
+                    {model.status === 'in_stampa' && (
+                      <span className="queue-models-status" title="In stampa">
+                        <FontAwesomeIcon icon={faPrint} />
+                        <span>In stampa</span>
+                      </span>
+                    )}
+                  </li>
+                ))}
+                {queueModels.length > 4 && (
+                  <li className="queue-models-more">
+                    +{queueModels.length - 4} prodotti in coda
+                  </li>
+                )}
+              </ul>
+            )}
+          </div>
+          <div className="queue-summary queue-summary-bottom">
+            <div className="queue-summary-item">
+              <span className="queue-summary-label">In coda</span>
+              <span className="queue-summary-value">{queueSummary.inQueueQty}</span>
+            </div>
+            <div className="queue-summary-item">
+              <span className="queue-summary-label">In stampa</span>
+              <span className="queue-summary-value">{queueSummary.inPrintQty}</span>
+            </div>
+            <div className="queue-summary-item">
+              <span className="queue-summary-label">Totale</span>
+              <span className="queue-summary-value">{queueSummary.totalQty}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="dashboard-secondary-card">
+          <div className="secondary-card-header">
+            <h3>Ultime Vendite</h3>
+            <Link to="/reports" className="secondary-card-link">Vai ai report</Link>
+          </div>
+          {recentSales.length === 0 ? (
+            <div className="secondary-empty">Nessuna vendita recente.</div>
+          ) : (
+            <ul className="recent-sales-list">
+              {recentSales.map((sale, index) => (
+                <li key={`${sale.sku || 'sale'}-${sale.sold_at}-${index}`} className="recent-sales-item">
+                  <div className="recent-sales-left">
+                    {sale.products?.models?.photo_url ? (
+                      <img
+                        src={sale.products.models.photo_url}
+                        alt={sale.products.models.name || sale.model_name || sale.sku}
+                        className="recent-sales-photo"
+                      />
+                    ) : (
+                      <div className="recent-sales-photo placeholder" />
+                    )}
+                    <div>
+                      <div className="recent-sales-title">
+                        {sale.model_name || sale.products?.models?.name || sale.sku || 'Vendita'}
+                      </div>
+                      <div className="recent-sales-meta">
+                        {new Date(sale.sold_at).toLocaleDateString('it-IT')}
+                        {sale.sales_channel && (
+                          <span
+                            className={`sales-channel-pill sales-channel-${sale.sales_channel.toLowerCase().replace(/\s+/g, '-')}`}
+                          >
+                            {sale.sales_channel}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="recent-sales-amount">€{parseFloat(sale.revenue || 0).toFixed(2)}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
 
       <div className="quick-actions">

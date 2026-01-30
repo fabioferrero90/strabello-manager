@@ -30,6 +30,12 @@ CREATE TABLE public.materials (
   color_hex text,
   CONSTRAINT materials_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.model_categories (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  name text NOT NULL UNIQUE,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT model_categories_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.models (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   name text NOT NULL,
@@ -38,6 +44,7 @@ CREATE TABLE public.models (
   dimensions text,
   photo_url text,
   model_3mf_url text,
+  category_id uuid,
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now(),
   sku text UNIQUE,
@@ -46,7 +53,8 @@ CREATE TABLE public.models (
   color2_weight_g numeric,
   color3_weight_g numeric,
   color4_weight_g numeric,
-  CONSTRAINT models_pkey PRIMARY KEY (id)
+  CONSTRAINT models_pkey PRIMARY KEY (id),
+  CONSTRAINT models_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.model_categories(id)
 );
 CREATE TABLE public.products (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),

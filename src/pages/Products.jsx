@@ -14,6 +14,7 @@ export default function Products() {
   const [accessories, setAccessories] = useState([])
   const [accessoryPieces, setAccessoryPieces] = useState([])
   const [models, setModels] = useState([])
+  const [categories, setCategories] = useState([])
   const [vatRegimes, setVatRegimes] = useState([])
   const [spools, setSpools] = useState([])
   const [availableSpools, setAvailableSpools] = useState([]) // Bobine disponibili per il materiale selezionato
@@ -24,6 +25,7 @@ export default function Products() {
   const [productsPage, setProductsPage] = useState(1)
   const [statusFilter, setStatusFilter] = useState('disponibile') // 'tutti', 'disponibile', 'venduto'
   const [storageFilter, setStorageFilter] = useState('tutti') // 'tutti', 'Mesmerized SRLS', 'Robe di Robertaebasta'
+  const [categoryFilter, setCategoryFilter] = useState('tutti')
   const [showModal, setShowModal] = useState(false)
   const [showSaleModal, setShowSaleModal] = useState(false)
   const [showDetailModal, setShowDetailModal] = useState(false)
@@ -111,16 +113,17 @@ export default function Products() {
   }, [showModelDropdown, showMaterialDropdown])
 
   const loadData = async () => {
-    const [materialsRes, accessoriesRes, accessoryPiecesRes, modelsRes, productsRes, vatRegimesRes, spoolsRes] = await Promise.all([
+    const [materialsRes, accessoriesRes, accessoryPiecesRes, modelsRes, categoriesRes, productsRes, vatRegimesRes, spoolsRes] = await Promise.all([
       supabase.from('materials').select('*').order('brand'),
       supabase.from('accessories').select('*').order('name'),
       supabase.from('accessory_pieces').select('*').order('created_at'),
       supabase.from('models').select('*').order('name'),
+      supabase.from('model_categories').select('*').order('name'),
       supabase
         .from('products')
         .select(`
           *,
-          models(name, weight_kg, photo_url, description, dimensions, sku, is_multimaterial),
+          models(name, weight_kg, photo_url, description, dimensions, sku, is_multimaterial, category_id),
           materials(brand, material_type, color, color_hex, purchased_from, cost_per_kg, bobina_photo_url, print_example_photo_url, code, status),
           product_accessories(id, accessory_id, accessory_piece_id, quantity_used, unit_cost, purchase_account, accessories(id, name, photo_url), accessory_pieces(id, unit_cost, purchase_account, purchased_from))
         `)
@@ -134,9 +137,10 @@ export default function Products() {
     setAccessoryPieces(accessoryPiecesRes.data || [])
     setModels(modelsRes.data || [])
     setProducts(productsRes.data || [])
+    setCategories(categoriesRes.data || [])
     setVatRegimes(vatRegimesRes.data || [])
     setSpools(spoolsRes.data || [])
-    applySearchFilter(productsRes.data || [], searchQuery, sortBy, statusFilter, storageFilter)
+    applySearchFilter(productsRes.data || [], searchQuery, sortBy, statusFilter, storageFilter, categoryFilter)
     setLoading(false)
   }
 
@@ -228,7 +232,7 @@ export default function Products() {
     }
   }, [editFormData.material_id, editingProduct, spools, models])
 
-  const applySearchFilter = (productsList, query, sortValue, statusValue = 'tutti', storageValue = 'tutti') => {
+  const applySearchFilter = (productsList, query, sortValue, statusValue = 'tutti', storageValue = 'tutti', categoryValue = 'tutti') => {
     // Escludi prodotti con stato "in_coda" o "in_stampa" dalla pagina Prodotti
     let filtered = productsList.filter(product => !['in_coda', 'in_stampa'].includes(product.status))
     
@@ -243,6 +247,15 @@ export default function Products() {
     // Filtro per magazzino
     if (storageValue !== 'tutti') {
       filtered = filtered.filter(product => product.storage_location === storageValue)
+    }
+
+    // Filtro per categoria modello
+    if (categoryValue !== 'tutti') {
+      if (categoryValue === 'senza_categoria') {
+        filtered = filtered.filter(product => !product.models?.category_id)
+      } else {
+        filtered = filtered.filter(product => product.models?.category_id === categoryValue)
+      }
     }
 
     // Filtro ricerca
@@ -298,8 +311,8 @@ export default function Products() {
   }
 
   useEffect(() => {
-    applySearchFilter(products, searchQuery, sortBy, statusFilter, storageFilter)
-  }, [searchQuery, sortBy, products, statusFilter, storageFilter])
+    applySearchFilter(products, searchQuery, sortBy, statusFilter, storageFilter, categoryFilter)
+  }, [searchQuery, sortBy, products, statusFilter, storageFilter, categoryFilter])
 
   useEffect(() => {
     if (filteredProducts.length === 0) {
@@ -2157,169 +2170,177 @@ export default function Products() {
         boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
         marginBottom: '20px'
       }}>
-        <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
-          <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
-            <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
-              Cerca Prodotti
-            </label>
-            <input
-              type="text"
-              placeholder="Cerca per SKU, modello, brand, materiale o colore..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: '2px solid #e0e0e0',
-                borderRadius: '8px',
-                fontSize: '14px'
-              }}
-            />
-            <small style={{ display: 'block', marginTop: '5px', color: '#7f8c8d', fontSize: '12px' }}>
-              {filteredProducts.length} {filteredProducts.length === 1 ? 'prodotto trovato' : 'prodotti trovati'}
-              {searchQuery && ` per "${searchQuery}"`}
-            </small>
-          </div>
-          <div className="form-group" style={{ marginBottom: 0, flex: '0 0 250px', display: 'flex', flexDirection: 'column' }}>
-            <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
-              Stato
-            </label>
-            <div style={{
-              display: 'flex',
-              gap: '4px',
-              background: '#f0f0f0',
-              borderRadius: '6px',
-              padding: '4px',
-              border: '2px solid #e0e0e0',
-              marginTop: 'auto'
-            }}>
-              <button
-                type="button"
-                onClick={() => setStatusFilter('tutti')}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+            <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
+              <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
+                Cerca Prodotti
+              </label>
+              <input
+                type="text"
+                placeholder="Cerca per SKU, modello, brand, materiale o colore..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 style={{
-                  flex: 1,
-                  padding: '8px 12px',
-                  border: 'none',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                  background: statusFilter === 'tutti' ? '#1a1a1a' : 'transparent',
-                  color: statusFilter === 'tutti' ? 'white' : '#1a1a1a',
-                  transition: 'all 0.2s ease'
+                  width: '100%',
+                  padding: '12px',
+                  border: '2px solid #e0e0e0',
+                  borderRadius: '8px',
+                  fontSize: '14px'
                 }}
-              >
-                Tutti
-              </button>
-              <button
-                type="button"
-                onClick={() => setStatusFilter('disponibile')}
-                style={{
-                  flex: 1,
-                  padding: '8px 12px',
-                  border: 'none',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                  background: statusFilter === 'disponibile' ? '#27ae60' : 'transparent',
-                  color: statusFilter === 'disponibile' ? 'white' : '#1a1a1a',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                Disponibile
-              </button>
-              <button
-                type="button"
-                onClick={() => setStatusFilter('venduto')}
-                style={{
-                  flex: 1,
-                  padding: '8px 12px',
-                  border: 'none',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                  background: statusFilter === 'venduto' ? '#3498db' : 'transparent',
-                  color: statusFilter === 'venduto' ? 'white' : '#1a1a1a',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                Venduto
-              </button>
+              />
+              <small style={{ display: 'block', marginTop: '5px', color: '#7f8c8d', fontSize: '12px' }}>
+                {filteredProducts.length} {filteredProducts.length === 1 ? 'prodotto trovato' : 'prodotti trovati'}
+                {searchQuery && ` per "${searchQuery}"`}
+              </small>
             </div>
           </div>
-          <div className="form-group" style={{ marginBottom: 0, flex: '0 0 200px', display: 'flex', flexDirection: 'column' }}>
-            <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
-              Prodotti per pagina
-            </label>
-            <select
-              value={productsPerPage}
-              onChange={(e) => setProductsPerPage(parseInt(e.target.value, 10))}
-              style={{
-                width: '100%',
-                padding: '12px',
+          <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start', flexWrap: 'wrap', width: '100%' }}>
+            <div className="form-group" style={{ marginBottom: 0, flex: '1 1 240px', minWidth: '220px', display: 'flex', flexDirection: 'column' }}>
+              <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
+                Stato
+              </label>
+              <div style={{
+                display: 'flex',
+                gap: '4px',
+                background: '#f0f0f0',
+                borderRadius: '6px',
+                padding: '4px',
                 border: '2px solid #e0e0e0',
-                borderRadius: '8px',
-                fontSize: '14px',
-                background: 'white',
                 marginTop: 'auto'
-              }}
-            >
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={250}>250</option>
-            </select>
-          </div>
-          <div className="form-group" style={{ marginBottom: 0, flex: '0 0 220px', display: 'flex', flexDirection: 'column' }}>
-            <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
-              Magazzino
-            </label>
-            <select
-              value={storageFilter}
-              onChange={(e) => setStorageFilter(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: '2px solid #e0e0e0',
-                borderRadius: '8px',
-                fontSize: '14px',
-                background: 'white',
-                marginTop: 'auto'
-              }}
-            >
-              <option value="tutti">Tutti</option>
-              <option value="Mesmerized SRLS">Mesmerized SRLS</option>
-              <option value="Robe di Robertaebasta">Robe di Robertaebasta</option>
-            </select>
-          </div>
-          <div className="form-group" style={{ marginBottom: 0, flex: '0 0 260px', display: 'flex', flexDirection: 'column' }}>
-            <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
-              Ordina per
-            </label>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: '2px solid #e0e0e0',
-                borderRadius: '8px',
-                fontSize: '14px',
-                background: 'white',
-                marginTop: 'auto'
-              }}
-            >
-              <option value="created_at">Data Caricamento (Più recenti)</option>
-              <option value="nome_crescente">Nome Crescente</option>
-              <option value="nome_decrescente">Nome Decrescente</option>
-              <option value="materiale_crescente">Materiale Crescente</option>
-              <option value="materiale_decrescente">Materiale Decrescente</option>
-              <option value="prezzo_crescente">Prezzo Vendita Crescente</option>
-              <option value="prezzo_decrescente">Prezzo Vendita Decrescente</option>
-              <option value="stato_crescente">Stato Crescente</option>
-              <option value="stato_decrescente">Stato Decrescente</option>
-            </select>
+              }}>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('tutti')}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    background: statusFilter === 'tutti' ? '#1a1a1a' : 'transparent',
+                    color: statusFilter === 'tutti' ? 'white' : '#1a1a1a',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  Tutti
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('disponibile')}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    background: statusFilter === 'disponibile' ? '#27ae60' : 'transparent',
+                    color: statusFilter === 'disponibile' ? 'white' : '#1a1a1a',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  Disponibile
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('venduto')}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    background: statusFilter === 'venduto' ? '#3498db' : 'transparent',
+                    color: statusFilter === 'venduto' ? 'white' : '#1a1a1a',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  Venduto
+                </button>
+              </div>
+            </div>
+            <div className="form-group" style={{ marginBottom: 0, flex: '1 1 220px', minWidth: '200px', display: 'flex', flexDirection: 'column' }}>
+              <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
+                Magazzino
+              </label>
+              <select
+                value={storageFilter}
+                onChange={(e) => setStorageFilter(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  border: '2px solid #e0e0e0',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  background: 'white',
+                  marginTop: 'auto'
+                }}
+              >
+                <option value="tutti">Tutti</option>
+                <option value="Mesmerized SRLS">Mesmerized SRLS</option>
+                <option value="Robe di Robertaebasta">Robe di Robertaebasta</option>
+              </select>
+            </div>
+            <div className="form-group" style={{ marginBottom: 0, flex: '1 1 220px', minWidth: '200px', display: 'flex', flexDirection: 'column' }}>
+              <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
+                Categoria
+              </label>
+              <select
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  border: '2px solid #e0e0e0',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  background: 'white',
+                  marginTop: 'auto'
+                }}
+              >
+                <option value="tutti">Tutte</option>
+                <option value="senza_categoria">Senza Categoria</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group" style={{ marginBottom: 0, flex: '1 1 240px', minWidth: '220px', display: 'flex', flexDirection: 'column' }}>
+              <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
+                Ordina per
+              </label>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  border: '2px solid #e0e0e0',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  background: 'white',
+                  marginTop: 'auto'
+                }}
+              >
+                <option value="created_at">Data Caricamento (Più recenti)</option>
+                <option value="nome_crescente">Nome Crescente</option>
+                <option value="nome_decrescente">Nome Decrescente</option>
+                <option value="materiale_crescente">Materiale Crescente</option>
+                <option value="materiale_decrescente">Materiale Decrescente</option>
+                <option value="prezzo_crescente">Prezzo Vendita Crescente</option>
+                <option value="prezzo_decrescente">Prezzo Vendita Decrescente</option>
+                <option value="stato_crescente">Stato Crescente</option>
+                <option value="stato_decrescente">Stato Decrescente</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
@@ -2327,8 +2348,27 @@ export default function Products() {
       <div className="products-table-container">
         {filteredProducts.length > 0 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid #ecf0f1' }}>
-            <div style={{ fontSize: '13px', color: '#7f8c8d' }}>
-              Pagina {safePage} di {totalPages}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ fontSize: '13px', color: '#7f8c8d' }}>
+                Pagina {safePage} di {totalPages}
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <select
+                  value={productsPerPage}
+                  onChange={(e) => setProductsPerPage(parseInt(e.target.value, 10))}
+                  style={{
+                    padding: '6px 10px',
+                    border: '1px solid #e0e0e0',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    background: 'white'
+                  }}
+                >
+                  <option value={50}>50 / pagina</option>
+                  <option value={100}>100 / pagina</option>
+                  <option value={250}>250 / pagina</option>
+                </select>
+              </div>
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button

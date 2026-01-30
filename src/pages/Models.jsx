@@ -12,10 +12,12 @@ export default function Models() {
   const [models, setModels] = useState([])
   const [filteredModels, setFilteredModels] = useState([])
   const [loading, setLoading] = useState(true)
+  const [categories, setCategories] = useState([])
   const [showModal, setShowModal] = useState(false)
   const [filters, setFilters] = useState({
     search: '',
-    sortBy: 'data_decrescente'
+    sortBy: 'data_decrescente',
+    categoryId: 'tutti'
   })
   const [editingModel, setEditingModel] = useState(null)
   const [selectedFile, setSelectedFile] = useState(null)
@@ -32,6 +34,7 @@ export default function Models() {
     dimensions: '',
     photo_url: '',
     model_3mf_url: '',
+    category_id: '',
     is_multimaterial: false,
     color1_weight_g: '',
     color2_weight_g: '',
@@ -44,15 +47,29 @@ export default function Models() {
   }, [])
 
   const loadModels = async () => {
-    const { data: modelsData, error: modelsError } = await supabase
-      .from('models')
-      .select('*')
-      .order('name')
+    const [
+      { data: modelsData, error: modelsError },
+      { data: categoriesData, error: categoriesError }
+    ] = await Promise.all([
+      supabase
+        .from('models')
+        .select('*')
+        .order('name'),
+      supabase
+        .from('model_categories')
+        .select('*')
+        .order('name')
+    ])
 
     if (modelsError) {
       console.error('Error loading models:', modelsError)
       setLoading(false)
       return
+    }
+    if (categoriesError) {
+      console.error('Error loading categories:', categoriesError)
+    } else {
+      setCategories(categoriesData || [])
     }
 
     // Carica i prodotti venduti per ogni modello
@@ -97,6 +114,15 @@ export default function Models() {
         m.name?.toLowerCase().includes(searchLower) ||
         m.sku?.toLowerCase().includes(searchLower)
       )
+    }
+
+    // Filtro per categoria
+    if (filterValues.categoryId && filterValues.categoryId !== 'tutti') {
+      if (filterValues.categoryId === 'senza_categoria') {
+        filtered = filtered.filter((model) => !model.category_id)
+      } else {
+        filtered = filtered.filter((model) => model.category_id === filterValues.categoryId)
+      }
     }
 
     // Ordinamento
@@ -232,6 +258,7 @@ export default function Models() {
         dimensions: formData.dimensions || null,
         photo_url: photoUrl || null,
         model_3mf_url: model3mfUrl || null,
+        category_id: formData.category_id || null,
         is_multimaterial: formData.is_multimaterial || false,
         color1_weight_g: formData.is_multimaterial && formData.color1_weight_g ? parseFloat(formData.color1_weight_g) : null,
         color2_weight_g: formData.is_multimaterial && formData.color2_weight_g ? parseFloat(formData.color2_weight_g) : null,
@@ -298,6 +325,7 @@ export default function Models() {
       dimensions: model.dimensions || '',
       photo_url: model.photo_url || '',
       model_3mf_url: model.model_3mf_url || '',
+      category_id: model.category_id || '',
       is_multimaterial: model.is_multimaterial || false,
       color1_weight_g: model.color1_weight_g || '',
       color2_weight_g: model.color2_weight_g || '',
@@ -433,6 +461,7 @@ export default function Models() {
       dimensions: '',
       photo_url: '',
       model_3mf_url: '',
+      category_id: '',
       is_multimaterial: false,
       color1_weight_g: '',
       color2_weight_g: '',
@@ -494,6 +523,32 @@ export default function Models() {
               {filteredModels.length} {filteredModels.length === 1 ? 'modello trovato' : 'modelli trovati'}
               {filters.search && ` per "${filters.search}"`}
             </small>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0, flex: '0 0 220px', display: 'flex', flexDirection: 'column' }}>
+            <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
+              Categoria
+            </label>
+            <select
+              value={filters.categoryId}
+              onChange={(e) => setFilters({ ...filters, categoryId: e.target.value })}
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '2px solid #e0e0e0',
+                borderRadius: '8px',
+                fontSize: '14px',
+                background: 'white',
+                marginTop: 'auto'
+              }}
+            >
+              <option value="tutti">Tutte</option>
+              <option value="senza_categoria">Senza Categoria</option>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="form-group" style={{ marginBottom: 0, flex: '0 0 300px', display: 'flex', flexDirection: 'column' }}>
             <label style={{ fontSize: '14px', marginBottom: '8px', display: 'block', color: '#1a1a1a', fontWeight: '500' }}>
@@ -686,6 +741,21 @@ export default function Models() {
                   style={{ textTransform: 'uppercase' }}
                 />
                 <small>SKU univoco del modello (es: MOD-001, VASE-01)</small>
+              </div>
+              <div className="form-group">
+                <label>Categoria</label>
+                <select
+                  value={formData.category_id}
+                  onChange={(e) => setFormData({ ...formData, category_id: e.target.value })}
+                >
+                  <option value="">Nessuna categoria</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+                <small>Opzionale: assegna una categoria al modello</small>
               </div>
               <div className="form-group">
                 <label>Note</label>
