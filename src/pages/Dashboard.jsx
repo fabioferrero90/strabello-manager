@@ -8,6 +8,8 @@ import './Dashboard.css'
 export default function Dashboard() {
   const [stats, setStats] = useState({
     warehouseValue: 0,
+    warehouseSaleValue: 0,
+    revenueLast30Days: 0,
     inQueue: 0,
     available: 0,
     sold: 0,
@@ -39,7 +41,7 @@ export default function Dashboard() {
 
   const loadStats = async () => {
     const [productsRes, queueProductsRes, materialsRes, salesRes, recentSalesRes] = await Promise.all([
-      supabase.from('products').select('status, production_cost, production_extra_costs, quantity'),
+      supabase.from('products').select('status, production_cost, production_extra_costs, quantity, sale_price'),
       supabase
         .from('products')
         .select('quantity, status, queue_order, material_id, multimaterial_mapping, models(name, photo_url), materials(color, color_hex)')
@@ -81,6 +83,15 @@ export default function Dashboard() {
         return sum + (totalCostPerProduct * quantity)
       }, 0)
 
+    // Valore di vendita dei prodotti disponibili in magazzino
+    const warehouseSaleValue = products
+      .filter((p) => p.status === 'disponibile')
+      .reduce((sum, p) => {
+        const salePrice = parseFloat(p.sale_price || 0)
+        const quantity = parseInt(p.quantity || 0)
+        return sum + (salePrice * quantity)
+      }, 0)
+
     // Calcola le quantità totali per ogni stato
     const inQueue = products
       .filter((p) => p.status === 'in_coda')
@@ -96,8 +107,20 @@ export default function Dashboard() {
     // Fatturato totale dell'anno in corso
     const totalRevenue = salesCurrentYear.reduce((sum, s) => sum + parseFloat(s.revenue || 0), 0)
 
+    // Fatturato ultimi 30 giorni
+    const thirtyDaysAgo = new Date()
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+    const revenueLast30Days = sales.reduce((sum, s) => {
+      if (!s.sold_at) return sum
+      const saleDate = new Date(s.sold_at)
+      if (saleDate < thirtyDaysAgo) return sum
+      return sum + parseFloat(s.revenue || 0)
+    }, 0)
+
     const stats = {
       warehouseValue,
+      warehouseSaleValue,
+      revenueLast30Days,
       inQueue,
       available,
       sold,
@@ -135,14 +158,12 @@ export default function Dashboard() {
     setRecentSales(recentSalesRes.data || [])
   }
 
-  const currentYear = new Date().getFullYear()
-  
   const statCards = [
-    { label: 'Valore Magazzino', value: `€${stats.warehouseValue.toFixed(2)}`, icon: faBox, color: '#2d2d2d' },
+    { label: 'Costo produzione magazzino', value: `€${stats.warehouseValue.toFixed(2)}`, icon: faBox, color: '#2d2d2d' },
+    { label: 'Valore di vendita magazzino', value: `€${stats.warehouseSaleValue.toFixed(2)}`, icon: faChartLine, color: '#16a085' },
     { label: 'In Coda', value: stats.inQueue, icon: faClock, color: '#f39c12' },
     { label: 'Prodotti Disponibili', value: stats.available, icon: faCheck, color: '#27ae60' },
     { label: 'Prodotti Venduti', value: stats.sold, icon: faDollarSign, color: '#e74c3c' },
-    { label: `Fatturato ${currentYear}`, value: `€${stats.totalRevenue.toFixed(2)}`, icon: faMoneyBill, color: '#9b59b6' },
   ]
 
   return (
@@ -279,6 +300,16 @@ export default function Dashboard() {
               ))}
             </ul>
           )}
+          <div className="recent-sales-metrics recent-sales-metrics-bottom">
+            <div className="recent-sales-metric">
+              <div className="recent-sales-metric-label">Fatturato ultimi 30gg</div>
+              <div className="recent-sales-metric-value">€{stats.revenueLast30Days.toFixed(2)}</div>
+            </div>
+            <div className="recent-sales-metric">
+              <div className="recent-sales-metric-label">Fatturato anno in corso</div>
+              <div className="recent-sales-metric-value">€{stats.totalRevenue.toFixed(2)}</div>
+            </div>
+          </div>
         </div>
       </div>
 
