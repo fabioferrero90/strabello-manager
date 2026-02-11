@@ -279,6 +279,10 @@ export default function PrintQueue() {
     // Ordinamento
     filtered.sort((a, b) => {
       if (sortValue === 'priorita') {
+        // Prima i "Prodotto venduto" (priorità maggiore), poi per queue_order/data
+        const soldA = a.is_sold_order ? 0 : 1
+        const soldB = b.is_sold_order ? 0 : 1
+        if (soldA !== soldB) return soldA - soldB
         const orderA = parseInt(a.queue_order ?? 0, 10)
         const orderB = parseInt(b.queue_order ?? 0, 10)
         if (orderA && orderB) return orderA - orderB
@@ -758,6 +762,7 @@ export default function PrintQueue() {
         administrative_cost: 0,
         status: 'in_coda',
         queue_order: nextQueueOrder,
+        is_sold_order: false,
         quantity: 1, // Prodotti sempre unici
         multimaterial_mapping: mappingForDb,
         created_by: user?.id,
@@ -864,6 +869,32 @@ export default function PrintQueue() {
     } catch (error) {
       console.error('Error updating status:', error)
       alert('Errore durante l\'aggiornamento dello stato')
+    }
+  }
+
+  const handleToggleSoldOrder = async (id, currentValue) => {
+    try {
+      const newValue = !currentValue
+      const { error } = await supabase
+        .from('products')
+        .update({ is_sold_order: newValue })
+        .eq('id', id)
+
+      if (error) throw error
+
+      const product = products.find((p) => p.id === id)
+      await logAction(
+        'modifica_prodotto',
+        'prodotto',
+        id,
+        product?.sku || 'Prodotto sconosciuto',
+        { is_sold_order: { from: currentValue, to: newValue } }
+      )
+
+      await loadData()
+    } catch (error) {
+      console.error('Error toggling sold order:', error)
+      alert('Errore durante l\'aggiornamento della priorità')
     }
   }
 
@@ -1326,18 +1357,19 @@ export default function PrintQueue() {
               <th></th>
               <th>SKU</th>
               <th>Modello</th>
-              <th>Peso Modello</th>
+              <th>Peso</th>
               <th>Materiale</th>
               <th>Stato</th>
-              <th>Costo Produzione</th>
-              <th>Prezzo Vendita</th>
+              <th>Priorità</th>
+              <th>Costo</th>
+              <th>Prezzo</th>
               <th>Azioni</th>
             </tr>
           </thead>
           <tbody>
             {filteredProducts.length === 0 ? (
               <tr>
-                <td colSpan="9" style={{ textAlign: 'center', padding: '40px', color: '#7f8c8d' }}>
+                <td colSpan="10" style={{ textAlign: 'center', padding: '40px', color: '#7f8c8d' }}>
                   {searchQuery
                     ? 'Nessun prodotto corrisponde alla ricerca.'
                     : 'Nessun prodotto in coda di stampa.'}
@@ -1585,6 +1617,29 @@ export default function PrintQueue() {
                       <span className={`status-badge ${statusBadge.class}`}>
                         {statusBadge.label}
                       </span>
+                    </td>
+                    <td>
+                      {product.status === 'in_coda' ? (
+                        <label
+                          className="priority-toggle"
+                          title={product.is_sold_order ? 'Rimuovi priorità "Prodotto venduto"' : 'Segna come Prodotto venduto (priorità maggiore)'}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!!product.is_sold_order}
+                            onChange={() => handleToggleSoldOrder(product.id, product.is_sold_order)}
+                          />
+                          <span className="priority-toggle-slider" />
+                          <span className="priority-toggle-label">
+                            {product.is_sold_order ? 'Venduto' : 'Normale'}
+                          </span>
+                        </label>
+                      ) : (
+                        <span style={{ color: '#94a3b8', fontSize: '13px' }}>
+                          {product.is_sold_order ? 'Prodotto venduto' : '—'}
+                        </span>
+                      )}
                     </td>
                     <td>
                       €{(() => {

@@ -88,6 +88,15 @@ export default function Products() {
     vat_regime: '',
     extra_costs: []
   })
+  const [showSetSaleModal, setShowSetSaleModal] = useState(false)
+  const [setSaleSearchQuery, setSetSaleSearchQuery] = useState('')
+  const [setSaleSelected, setSetSaleSelected] = useState([]) // [{ product, salePrice: string }, ...]
+  const [setSaleSingleListing, setSetSaleSingleListing] = useState(false)
+  const [setSaleForm, setSetSaleForm] = useState({ sales_channel: '', vat_regime: '' })
+  const [setSaleStep, setSetSaleStep] = useState(1) // 1 = selezione, 2 = riepilogo
+  const [setSaleSummary, setSetSaleSummary] = useState(null) // { perProduct: [...], totals: {...} }
+  const [setSalePrecomputed, setSetSalePrecomputed] = useState(null) // { salesToInsert, productUpdates }
+  const [setSaleComputing, setSetSaleComputing] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -1191,6 +1200,281 @@ export default function Products() {
     }
   }
 
+  const computeSetSaleData = async () => {
+    const N = Math.max(1, Number(setSaleSelected.length))
+    const { data: channelSettings, error: channelError } = await supabase
+      .from('sales_channels_settings')
+      .select('*')
+      .eq('channel_name', setSaleForm.sales_channel)
+      .single()
+
+    if (channelError && channelError.code !== 'PGRST116') {
+      throw new Error('Errore nel recupero delle impostazioni del canale: ' + channelError.message)
+    }
+
+    const selectedVatRegime = vatRegimes.find((r) => r.name === setSaleForm.vat_regime)
+    const vatRate = selectedVatRegime ? parseFloat(selectedVatRegime.vat_rate) : 0
+
+    const packagingCostPerProduct = parseFloat(channelSettings?.packaging_cost || 0)
+    const administrativeTotal = parseFloat(channelSettings?.administrative_base_cost || 0)
+    // Costo amministrativo: una sola volta per tutta la vendita set, diviso tra i N prodotti
+    const administrativeCostPerProduct = parseFloat((administrativeTotal / N).toFixed(2))
+
+    const promotionCostType = channelSettings?.promotion_cost_type || 'fixed'
+    const promotionCostPercent = parseFloat(channelSettings?.promotion_cost_percent || 0)
+    const promotionCostPercentBase = channelSettings?.promotion_cost_percent_base || 'gross'
+    const promotionBaseSum =
+      promotionCostType === 'percent'
+        ? setSaleSelected.reduce((sum, e) => {
+            const p = parseFloat(e.salePrice || 0)
+            const vatAmountPerProduct = vatRate > 0 ? p * (vatRate / (100 + vatRate)) : 0
+            const base = promotionCostPercentBase === 'net' ? p - vatAmountPerProduct : p
+            return sum + base
+          }, 0)
+        : 0
+    const rawPromotionTotal =
+      promotionCostType === 'percent'
+        ? promotionBaseSum * (promotionCostPercent / 100)
+        : parseFloat(channelSettings?.promotion_cost_per_product || 0) * (setSaleSingleListing ? 1 : N)
+    const promotionCostPerProduct = setSaleSingleListing
+      ? rawPromotionTotal / N
+      : promotionCostType === 'percent'
+        ? setSaleSelected.map((e) => {
+            const salePrice = parseFloat(e.salePrice || 0)
+            const vatAmountPerProduct = vatRate > 0 ? salePrice * (vatRate / (100 + vatRate)) : 0
+            const base = promotionCostPercentBase === 'net' ? salePrice - vatAmountPerProduct : salePrice
+            return base * (promotionCostPercent / 100)
+          })
+        : parseFloat(channelSettings?.promotion_cost_per_product || 0)
+
+    const salesToInsert = []
+    const productUpdates = []
+    const perProduct = []
+
+    for (let i = 0; i < setSaleSelected.length; i++) {
+      const { product: selectedProduct, salePrice: salePriceStr } = setSaleSelected[i]
+      const quantitySold = 1
+      const salePrice = parseFloat(salePriceStr)
+      const revenue = salePrice * quantitySold
+      const vatAmount = vatRate > 0 ? revenue * (vatRate / (100 + vatRate)) : 0
+
+      const productionCostBase = parseFloat(selectedProduct.production_cost || 0)
+      const productionExtraCosts = selectedProduct.production_extra_costs || []
+      const productionExtraTotal = productionExtraCosts.reduce((sum, cost) => sum + (parseFloat(cost.amount || 0) || 0), 0)
+      const totalProductionCost = productionCostBase + productionExtraTotal
+
+      const promotionCost = Array.isArray(promotionCostPerProduct) ? promotionCostPerProduct[i] : promotionCostPerProduct
+      const totalCostsPerProduct =
+        totalProductionCost +
+        packagingCostPerProduct +
+        administrativeCostPerProduct +
+        (isNaN(promotionCost) ? 0 : promotionCost)
+
+      const profit = revenue - totalCostsPerProduct - vatAmount
+
+      let productionCostByAccount = []
+      let spoolPurchaseAccount = null
+      let spoolId = null
+      const productModel = models.find((m) => m.id === selectedProduct.model_id)
+      const isMultimaterial = productModel?.is_multimaterial
+
+      if (isMultimaterial && selectedProduct.multimaterial_mapping) {
+        const mapping = Array.isArray(selectedProduct.multimaterial_mapping) ? selectedProduct.multimaterial_mapping : []
+        const costByAccountMap = {}
+        const spoolIds = mapping.map((m) => m.spool_id).filter(Boolean)
+        if (spoolIds.length > 0) {
+          const { data: spoolsData } = await supabase.from('spools').select('id, purchase_account, price').in('id', spoolIds)
+          const spoolsMap = {}
+          if (spoolsData) spoolsData.forEach((spool) => { spoolsMap[spool.id] = spool })
+          for (const colorMapping of mapping) {
+            if (!colorMapping.spool_id) continue
+            const spool = spoolsMap[colorMapping.spool_id]
+            if (!spool?.purchase_account) continue
+            const colorKey = `color${colorMapping.color}`
+            const weightGrams = parseFloat(productModel[`${colorKey}_weight_g`] || 0)
+            const weightKg = weightGrams / 1000
+            const costForThisMaterial = weightKg * parseFloat(spool.price || 0)
+            if (!costByAccountMap[spool.purchase_account]) costByAccountMap[spool.purchase_account] = { account: spool.purchase_account, cost: 0 }
+            costByAccountMap[spool.purchase_account].cost += costForThisMaterial
+          }
+            productionCostByAccount = Object.values(costByAccountMap).map((item) => ({ account: item.account, cost: parseFloat(item.cost.toFixed(2)) }))
+            if (mapping[0]?.spool_id) {
+              spoolId = mapping[0].spool_id
+              const { data: firstSpoolData } = await supabase.from('spools').select('purchase_account').eq('id', mapping[0].spool_id).single()
+              spoolPurchaseAccount = firstSpoolData?.purchase_account || null
+            }
+          }
+      } else if (selectedProduct.spool_id) {
+        spoolId = selectedProduct.spool_id
+        const { data: spoolData } = await supabase.from('spools').select('purchase_account, price').eq('id', selectedProduct.spool_id).single()
+        spoolPurchaseAccount = spoolData?.purchase_account || null
+        if (spoolData?.purchase_account && productModel) {
+          const weightKg = parseFloat(productModel.weight_kg || 0)
+          const cost = weightKg * parseFloat(spoolData.price || 0)
+          productionCostByAccount = [{ account: spoolData.purchase_account, cost: parseFloat(cost.toFixed(2)) }]
+        }
+      }
+
+      const accessoryCostByAccount = {}
+      ;(selectedProduct.product_accessories || []).forEach((item) => {
+        const qty = parseInt(item.quantity_used, 10) || 0
+        const unitCost = parseFloat(item.unit_cost || 0)
+        if (!item.purchase_account || qty <= 0) return
+        if (!accessoryCostByAccount[item.purchase_account]) accessoryCostByAccount[item.purchase_account] = 0
+        accessoryCostByAccount[item.purchase_account] += qty * unitCost
+      })
+      if (Object.keys(accessoryCostByAccount).length > 0) {
+        const merged = [...productionCostByAccount]
+        Object.entries(accessoryCostByAccount).forEach(([account, cost]) => {
+          const existing = merged.find((entry) => entry.account === account)
+          if (existing) existing.cost = parseFloat((existing.cost + cost).toFixed(2))
+          else merged.push({ account, cost: parseFloat(cost.toFixed(2)) })
+        })
+        productionCostByAccount = merged
+      }
+
+      perProduct.push({
+        product: selectedProduct,
+        salePrice,
+        revenue,
+        productionCost: totalProductionCost,
+        packagingCost: packagingCostPerProduct,
+        administrativeCost: administrativeCostPerProduct,
+        promotionCost: isNaN(promotionCost) ? 0 : promotionCost,
+        totalCosts: totalCostsPerProduct,
+        profit,
+        vatAmount,
+      })
+
+      salesToInsert.push({
+        product_id: selectedProduct.id,
+        sku: selectedProduct.sku,
+        model_id: selectedProduct.model_id,
+        model_name: selectedProduct.models?.name || null,
+        model_sku: selectedProduct.models?.sku || null,
+        material_id: selectedProduct.material_id,
+        material_brand: selectedProduct.materials?.brand || null,
+        material_type: selectedProduct.materials?.material_type || null,
+        material_color: selectedProduct.materials?.color || null,
+        material_color_hex: selectedProduct.materials?.color_hex || null,
+        spool_id: spoolId || selectedProduct.spool_id || null,
+        spool_purchase_account: spoolPurchaseAccount,
+        production_cost_by_account: productionCostByAccount,
+        quantity_sold: quantitySold,
+        sale_price: salePrice,
+        sales_channel: setSaleForm.sales_channel,
+        vat_regime: setSaleForm.vat_regime,
+        vat_rate: vatRate,
+        vat_amount: vatAmount,
+        production_cost_base: productionCostBase,
+        production_extra_costs: productionExtraCosts,
+        total_production_cost: totalProductionCost,
+        packaging_cost: packagingCostPerProduct,
+        administrative_cost: administrativeCostPerProduct,
+        promotion_cost: isNaN(promotionCost) ? 0 : promotionCost,
+        extra_costs: [],
+        total_costs: totalCostsPerProduct,
+        revenue,
+        profit,
+        sold_at: new Date().toISOString(),
+      })
+
+      productUpdates.push({
+        id: selectedProduct.id,
+        status: 'venduto',
+        final_sale_price: salePrice,
+        sales_channel: setSaleForm.sales_channel,
+        quantity_sold: quantitySold,
+        quantity: (selectedProduct.quantity || 1) - quantitySold,
+        sold_at: new Date().toISOString(),
+        vat_regime: setSaleForm.vat_regime,
+      })
+    }
+
+    const totals = {
+      totalRevenue: perProduct.reduce((s, r) => s + r.revenue, 0),
+      totalProduction: perProduct.reduce((s, r) => s + r.productionCost, 0),
+      totalPackaging: perProduct.reduce((s, r) => s + r.packagingCost, 0),
+      totalAdministrative: perProduct.reduce((s, r) => s + r.administrativeCost, 0),
+      totalPromotion: perProduct.reduce((s, r) => s + r.promotionCost, 0),
+      totalCosts: perProduct.reduce((s, r) => s + r.totalCosts, 0),
+      totalVat: perProduct.reduce((s, r) => s + r.vatAmount, 0),
+      totalProfit: perProduct.reduce((s, r) => s + r.profit, 0),
+    }
+
+    return { salesToInsert, productUpdates, perProduct, totals }
+  }
+
+  const handleSetSaleContinue = async (e) => {
+    e.preventDefault()
+    if (setSaleSelected.length === 0) {
+      alert('Seleziona almeno un prodotto')
+      return
+    }
+    if (!setSaleForm.sales_channel) {
+      alert('Seleziona un canale di vendita')
+      return
+    }
+    if (!setSaleForm.vat_regime) {
+      alert('Seleziona un regime IVA')
+      return
+    }
+    const invalid = setSaleSelected.find((e) => !e.salePrice || parseFloat(e.salePrice) < 0)
+    if (invalid) {
+      alert('Inserisci un prezzo di vendita valido per ogni prodotto selezionato')
+      return
+    }
+    setSetSaleComputing(true)
+    try {
+      const result = await computeSetSaleData()
+      setSetSaleSummary({ perProduct: result.perProduct, totals: result.totals })
+      setSetSalePrecomputed({ salesToInsert: result.salesToInsert, productUpdates: result.productUpdates })
+      setSetSaleStep(2)
+    } catch (error) {
+      console.error('Error:', error)
+      alert('Errore nel calcolo: ' + error.message)
+    } finally {
+      setSetSaleComputing(false)
+    }
+  }
+
+  const handleSetSaleConfirm = async () => {
+    if (!setSalePrecomputed) return
+    const { salesToInsert, productUpdates } = setSalePrecomputed
+    try {
+      for (const saleData of salesToInsert) {
+        const { error: saleError } = await supabase.from('sales').insert(saleData)
+        if (saleError) throw new Error('Errore nel salvataggio della vendita: ' + saleError.message)
+      }
+      for (const upd of productUpdates) {
+        const { id, ...rest } = upd
+        const { error: updateError } = await supabase.from('products').update(rest).eq('id', id)
+        if (updateError) throw new Error('Errore durante l\'aggiornamento del prodotto: ' + updateError.message)
+      }
+      await loadData()
+      setShowSetSaleModal(false)
+      setSetSaleSelected([])
+      setSetSaleForm({ sales_channel: '', vat_regime: '' })
+      setSetSaleSingleListing(false)
+      setSetSaleStep(1)
+      setSetSaleSummary(null)
+      setSetSalePrecomputed(null)
+      alert(`Vendita set registrata: ${salesToInsert.length} prodotto/i venduto/i.`)
+    } catch (error) {
+      console.error('Error:', error)
+      alert('Errore durante la vendita set: ' + error.message)
+    }
+  }
+
+  const handleSetSaleSubmit = async (e) => {
+    e.preventDefault()
+    if (setSaleStep === 2 && setSalePrecomputed) {
+      await handleSetSaleConfirm()
+      return
+    }
+    await handleSetSaleContinue(e)
+  }
+
   const handleEditProduct = (product) => {
     setEditingInfoProduct(product)
     setEditInfoForm({
@@ -2160,6 +2444,23 @@ export default function Products() {
     <div className="products-page">
       <div className="page-header">
         <h1>Gestione Prodotti</h1>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => {
+            setSetSaleSearchQuery('')
+            setSetSaleSelected([])
+            setSetSaleSingleListing(false)
+            setSetSaleForm({ sales_channel: '', vat_regime: '' })
+            setSetSaleStep(1)
+            setSetSaleSummary(null)
+            setSetSalePrecomputed(null)
+            setShowSetSaleModal(true)
+          }}
+        >
+          <FontAwesomeIcon icon={faDollarSign} style={{ marginRight: '8px' }} />
+          Vendi set
+        </button>
       </div>
 
       {/* Barra di ricerca e ordinamento */}
@@ -3796,6 +4097,290 @@ export default function Products() {
           </div>
         </div>
       )}
+
+      {showSetSaleModal && (() => {
+        const availableForSet = products.filter((p) => p.status === 'disponibile' && !['in_coda', 'in_stampa'].includes(p.status))
+        const query = setSaleSearchQuery.trim().toLowerCase()
+        const filteredForSet = query
+          ? availableForSet.filter((p) => {
+              if (p.sku?.toLowerCase().includes(query)) return true
+              if (p.models?.name?.toLowerCase().includes(query)) return true
+              if (p.materials?.brand?.toLowerCase().includes(query)) return true
+              if (p.materials?.material_type?.toLowerCase().includes(query)) return true
+              if (p.materials?.color?.toLowerCase().includes(query)) return true
+              return false
+            })
+          : availableForSet
+        const toggleProduct = (product, salePrice = '') => {
+          const exists = setSaleSelected.find((e) => e.product.id === product.id)
+          if (exists) {
+            setSetSaleSelected(setSaleSelected.filter((e) => e.product.id !== product.id))
+          } else {
+            setSetSaleSelected([...setSaleSelected, { product, salePrice: salePrice || String(product.sale_price || '') }])
+          }
+        }
+        const setPriceFor = (productId, value) => {
+          setSetSaleSelected(setSaleSelected.map((e) => (e.product.id === productId ? { ...e, salePrice: value } : e)))
+        }
+        const isSelected = (productId) => setSaleSelected.some((e) => e.product.id === productId)
+        const getPriceFor = (productId) => setSaleSelected.find((e) => e.product.id === productId)?.salePrice ?? ''
+
+        const closeSetSaleModal = () => {
+          setShowSetSaleModal(false)
+          setSetSaleSelected([])
+          setSetSaleStep(1)
+          setSetSaleSummary(null)
+          setSetSalePrecomputed(null)
+        }
+
+        return (
+          <div className="modal-overlay" onClick={closeSetSaleModal}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: setSaleStep === 2 ? '820px' : '720px', maxHeight: '90vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <h2>{setSaleStep === 2 ? 'Riepilogo vendita set' : 'Vendita set (più prodotti in un\'unica vendita)'}</h2>
+              {setSaleStep === 2 && setSaleSummary ? (
+                <>
+                  <div style={{ flex: 1, minHeight: 0, overflow: 'auto', marginBottom: '16px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '2px solid #e0e0e0', background: '#f8f9fa' }}>
+                          <th style={{ textAlign: 'left', padding: '10px 8px' }}>Prodotto</th>
+                          <th style={{ textAlign: 'right', padding: '8px' }}>Prezzo (€)</th>
+                          <th style={{ textAlign: 'right', padding: '8px' }}>Prod. (€)</th>
+                          <th style={{ textAlign: 'right', padding: '8px' }}>Imball. (€)</th>
+                          <th style={{ textAlign: 'right', padding: '8px' }}>Admin. (€)</th>
+                          <th style={{ textAlign: 'right', padding: '8px' }}>Spons. (€)</th>
+                          <th style={{ textAlign: 'right', padding: '8px' }}>Costi (€)</th>
+                          <th style={{ textAlign: 'right', padding: '8px' }}>IVA (€)</th>
+                          <th style={{ textAlign: 'right', padding: '8px' }}>Profitto (€)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {setSaleSummary.perProduct.map((row) => (
+                          <tr key={row.product.id} style={{ borderBottom: '1px solid #eee' }}>
+                            <td style={{ padding: '8px' }}>
+                              <strong>{row.product.sku || '—'}</strong>
+                              <div style={{ fontSize: '12px', color: '#64748b' }}>{row.product.models?.name || '—'}</div>
+                            </td>
+                            <td style={{ padding: '8px', textAlign: 'right' }}>{row.salePrice.toFixed(2)}</td>
+                            <td style={{ padding: '8px', textAlign: 'right' }}>{row.productionCost.toFixed(2)}</td>
+                            <td style={{ padding: '8px', textAlign: 'right' }}>{row.packagingCost.toFixed(2)}</td>
+                            <td style={{ padding: '8px', textAlign: 'right' }}>{row.administrativeCost.toFixed(2)}</td>
+                            <td style={{ padding: '8px', textAlign: 'right' }}>{row.promotionCost.toFixed(2)}</td>
+                            <td style={{ padding: '8px', textAlign: 'right' }}>{row.totalCosts.toFixed(2)}</td>
+                            <td style={{ padding: '8px', textAlign: 'right' }}>{row.vatAmount.toFixed(2)}</td>
+                            <td style={{ padding: '8px', textAlign: 'right', fontWeight: '600', color: row.profit >= 0 ? '#15803d' : '#b91c1c' }}>{row.profit.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ borderTop: '2px solid #1a1a1a', background: '#f1f5f9', fontWeight: '600' }}>
+                          <td style={{ padding: '10px 8px' }}>Totale</td>
+                          <td style={{ padding: '8px', textAlign: 'right' }}>{setSaleSummary.totals.totalRevenue.toFixed(2)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right' }}>{setSaleSummary.totals.totalProduction.toFixed(2)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right' }}>{setSaleSummary.totals.totalPackaging.toFixed(2)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right' }}>{setSaleSummary.totals.totalAdministrative.toFixed(2)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right' }}>{setSaleSummary.totals.totalPromotion.toFixed(2)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right' }}>{setSaleSummary.totals.totalCosts.toFixed(2)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right' }}>{setSaleSummary.totals.totalVat.toFixed(2)}</td>
+                          <td style={{ padding: '8px', textAlign: 'right', color: setSaleSummary.totals.totalProfit >= 0 ? '#15803d' : '#b91c1c' }}>{setSaleSummary.totals.totalProfit.toFixed(2)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                  <div className="modal-actions">
+                    <button type="button" className="btn-secondary" onClick={() => { setSetSaleStep(1); setSetSaleSummary(null); setSetSalePrecomputed(null) }}>
+                      Indietro
+                    </button>
+                    <button type="button" className="btn-primary" onClick={handleSetSaleConfirm}>
+                      Conferma e registra vendita
+                    </button>
+                  </div>
+                </>
+              ) : (
+              <form onSubmit={handleSetSaleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+                <div className="form-group">
+                  <label>Canale di vendita</label>
+                  <select
+                    value={setSaleForm.sales_channel}
+                    onChange={(e) => setSetSaleForm({ ...setSaleForm, sales_channel: e.target.value })}
+                    required
+                    style={{ width: '100%', padding: '12px', border: '2px solid #e0e0e0', borderRadius: '8px', fontSize: '14px', background: 'white' }}
+                  >
+                    <option value="">Seleziona un canale</option>
+                    <option value="Vinted">Vinted</option>
+                    <option value="eBay">eBay</option>
+                    <option value="Shopify">Shopify</option>
+                    <option value="Negozio Fisico">Negozio Fisico</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Regime IVA</label>
+                  <div style={{ position: 'relative' }}>
+                    <select
+                      value={setSaleForm.vat_regime}
+                      onChange={(e) => setSetSaleForm({ ...setSaleForm, vat_regime: e.target.value })}
+                      required
+                      style={{ width: '100%', padding: '12px 12px 12px 50px', border: '2px solid #e0e0e0', borderRadius: '8px', fontSize: '14px', background: 'white' }}
+                    >
+                      <option value="">Seleziona un regime IVA</option>
+                      {vatRegimes.map((regime) => (
+                        <option key={regime.id} value={regime.name}>{regime.name}</option>
+                      ))}
+                    </select>
+                    {setSaleForm.vat_regime && vatRegimes.find((r) => r.name === setSaleForm.vat_regime)?.country_code && (
+                      <div style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>
+                        <ReactCountryFlag countryCode={vatRegimes.find((r) => r.name === setSaleForm.vat_regime).country_code} svg style={{ width: '24px', height: '18px' }} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="set-sale-single-toggle">
+                    <input
+                      type="checkbox"
+                      checked={setSaleSingleListing}
+                      onChange={(e) => setSetSaleSingleListing(e.target.checked)}
+                    />
+                    <span className="set-sale-toggle-slider" />
+                    <div className="set-sale-toggle-copy">
+                      <span className="set-sale-toggle-label">Inserzione unica</span>
+                      <span className="set-sale-toggle-desc">Il costo di sponsorizzazione è conteggiato una sola volta e diviso tra i prodotti.</span>
+                    </div>
+                  </label>
+                </div>
+                <div className="form-group">
+                  <label>Cerca prodotti da includere</label>
+                  <input
+                    type="text"
+                    placeholder="Cerca per SKU, modello, materiale, colore..."
+                    value={setSaleSearchQuery}
+                    onChange={(e) => setSetSaleSearchQuery(e.target.value)}
+                    style={{ width: '100%', padding: '12px', border: '2px solid #e0e0e0', borderRadius: '8px', fontSize: '14px' }}
+                  />
+                </div>
+                <div style={{ flex: 1, minHeight: 0, overflow: 'auto', border: '1px solid #e0e0e0', borderRadius: '8px', padding: '8px', marginBottom: '16px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #e0e0e0' }}>
+                        <th style={{ textAlign: 'left', padding: '8px', width: 36 }}></th>
+                        <th style={{ textAlign: 'left', padding: '8px', width: 56 }}>Foto</th>
+                        <th style={{ textAlign: 'left', padding: '8px' }}>SKU / Modello</th>
+                        <th style={{ textAlign: 'left', padding: '8px' }}>Materiale</th>
+                        <th style={{ textAlign: 'right', padding: '8px' }}>Prezzo vendita (€)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredForSet.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} style={{ padding: '20px', textAlign: 'center', color: '#7f8c8d' }}>
+                            {availableForSet.length === 0 ? 'Nessun prodotto disponibile.' : 'Nessun prodotto corrisponde alla ricerca.'}
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredForSet.map((p) => (
+                          <tr key={p.id} style={{ borderBottom: '1px solid #eee' }}>
+                            <td style={{ padding: '8px' }}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected(p.id)}
+                                onChange={() => toggleProduct(p, String(p.sale_price || ''))}
+                              />
+                            </td>
+                            <td style={{ padding: '8px' }}>
+                              {p.models?.photo_url ? (
+                                <img
+                                  src={p.models.photo_url}
+                                  alt=""
+                                  style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: '6px', border: '1px solid #e0e0e0' }}
+                                />
+                              ) : (
+                                <div style={{ width: 40, height: 40, borderRadius: '6px', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', color: '#94a3b8' }}>📦</div>
+                              )}
+                            </td>
+                            <td style={{ padding: '8px' }}>
+                              <strong>{p.sku || '—'}</strong>
+                              <div style={{ fontSize: '12px', color: '#64748b' }}>{p.models?.name || '—'}</div>
+                            </td>
+                            <td style={{ padding: '8px' }}>
+                              {p.models?.is_multimaterial && Array.isArray(p.multimaterial_mapping) && p.multimaterial_mapping.length > 1 ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  {getMultimaterialDetails(p).map(({ colorIndex, material }) => (
+                                    material ? (
+                                      <div key={`${p.id}-${colorIndex}-${material.id}`} style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                        {material.color_hex && (
+                                          <span
+                                            style={{
+                                              width: 14,
+                                              height: 14,
+                                              borderRadius: '50%',
+                                              backgroundColor: material.color_hex,
+                                              border: '1px solid #ddd',
+                                              flexShrink: 0,
+                                            }}
+                                            title={material.color || ''}
+                                          />
+                                        )}
+                                        <span><strong>{material.brand}</strong>{material.color ? ` ${material.color}` : ''}</span>
+                                      </div>
+                                    ) : (
+                                      <span key={`${p.id}-${colorIndex}`} style={{ fontSize: '12px', color: '#94a3b8' }}>Colore {colorIndex}: —</span>
+                                    )
+                                  ))}
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                  {p.materials?.color_hex && (
+                                    <span
+                                      style={{
+                                        width: 14,
+                                        height: 14,
+                                        borderRadius: '50%',
+                                        backgroundColor: p.materials.color_hex,
+                                        border: '1px solid #ddd',
+                                        flexShrink: 0,
+                                      }}
+                                      title={p.materials?.color || ''}
+                                    />
+                                  )}
+                                  <span><strong>{p.materials?.brand || '—'}</strong>{p.materials?.color ? ` ${p.materials.color}` : ''}</span>
+                                </div>
+                              )}
+                            </td>
+                            <td style={{ padding: '8px', textAlign: 'right' }}>
+                              {isSelected(p.id) ? (
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={getPriceFor(p.id)}
+                                  onChange={(e) => setPriceFor(p.id, e.target.value)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  style={{ width: '90px', padding: '6px 8px', border: '1px solid #ccc', borderRadius: '4px', textAlign: 'right' }}
+                                />
+                              ) : (
+                                <span style={{ color: '#94a3b8' }}>—</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="modal-actions">
+                  <button type="button" className="btn-secondary" onClick={closeSetSaleModal}>
+                    Annulla
+                  </button>
+                  <button type="submit" className="btn-primary" disabled={setSaleSelected.length === 0 || setSaleComputing}>
+                    {setSaleComputing ? 'Calcolo...' : `Continua al riepilogo (${setSaleSelected.length} prodotto/i)`}
+                  </button>
+                </div>
+              </form>
+              )}
+            </div>
+          </div>
+        )
+      })()}
 
       {showEditModal && editingProduct && (() => {
         const productModel = models.find(m => m.id === editingProduct.model_id)

@@ -115,6 +115,7 @@ CREATE TABLE public.products (
   multimaterial_mapping jsonb,
   spool_id uuid,
   queue_order integer,
+  is_sold_order boolean NOT NULL DEFAULT false,
   storage_location text CHECK (storage_location IS NULL OR (storage_location = ANY (ARRAY['Mesmerized SRLS'::text, 'Robe di Robertaebasta'::text]))),
   CONSTRAINT products_pkey PRIMARY KEY (id),
   CONSTRAINT products_model_id_fkey FOREIGN KEY (model_id) REFERENCES public.models(id),
